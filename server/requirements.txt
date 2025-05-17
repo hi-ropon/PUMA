@@ -5,3 +5,4 @@ python-dotenv
 eventlet
 openai
 flask-login
+openai-agents

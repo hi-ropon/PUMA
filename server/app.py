@@ -1,6 +1,8 @@
 import os
 import csv
 import io
+import json
+import re
 import openai                                     # グローバル参照用
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -11,6 +13,13 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import requests
+
+try:
+    from openai_agents import Agent, tool
+except Exception:  # pragma: no cover - optional dependency
+    Agent = None
+    def tool(func):
+        return func
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -71,6 +80,125 @@ class User(UserMixin):
         self.id = username
 
 
+def search_program(device: str, addr: int, context: int = 0) -> list[str]:
+    """Return program lines referencing the given device with optional context."""
+    target = f"{device}{addr}"
+    results: list[str] = []
+    for prog in PROGRAMS.values():
+        headers = prog.get("headers", [])
+        rows = prog.get("rows", [])
+        if not rows or "I/O(デバイス)" not in headers:
+            continue
+        io_idx = headers.index("I/O(デバイス)")
+        step_idx = headers.index("ステップ番号") if "ステップ番号" in headers else None
+        inst_idx = headers.index("命令") if "命令" in headers else None
+        note_idx = headers.index("ノート") if "ノート" in headers else None
+        for i, row in enumerate(rows):
+            if len(row) <= io_idx:
+                continue
+            if row[io_idx].strip().strip('"') != target:
+                continue
+            start = max(0, i - context)
+            for j in range(start, i + 1):
+                ctx = rows[j]
+                if len(ctx) <= io_idx:
+                    continue
+                parts = []
+                if step_idx is not None and len(ctx) > step_idx and ctx[step_idx]:
+                    parts.append(f"ステップ{ctx[step_idx]}")
+                if inst_idx is not None and len(ctx) > inst_idx and ctx[inst_idx]:
+                    parts.append(ctx[inst_idx])
+                if len(ctx) > io_idx and ctx[io_idx]:
+                    parts.append(ctx[io_idx])
+                if note_idx is not None and len(ctx) > note_idx and ctx[note_idx]:
+                    parts.append(f"({ctx[note_idx]})")
+                if parts:
+                    line = " ".join(parts)
+                    if line not in results:
+                        results.append(line)
+    return results
+
+
+def related_devices(device: str, addr: int, context: int = 2) -> list[str]:
+    """Return devices appearing near the target in the program."""
+    pattern = re.compile(r"[XYMDTS]\d+")
+    lines = search_program(device, addr, context=context)
+    deps: set[str] = set()
+    for line in lines:
+        for m in pattern.findall(line):
+            if m != f"{device}{addr}":
+                deps.add(m)
+    return sorted(deps)
+
+
+def read_device_values(device: str, addr: int, length: int, *, base_url: str, ip: str, port: str) -> list[int]:
+    """Read device values via gateway."""
+    res = requests.get(
+        f"{base_url}/{device}/{addr}/{length}",
+        params={"ip": ip, "port": port},
+    )
+    res.raise_for_status()
+    return res.json()["values"]
+
+
+def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -> str:
+    """Run autonomous analysis using OpenAI agents if available."""
+
+    @tool
+    def read_values(dev: str, address: int, length: int = 1) -> str:
+        """Read PLC device values."""
+        vals = read_device_values(dev, address, length, base_url=base_url, ip=ip, port=port)
+        return ",".join(str(v) for v in vals)
+
+    @tool
+    def program_lines(dev: str, address: int) -> str:
+        """Return program excerpt around the device."""
+        lines = search_program(dev, address, context=2)
+        return "\n".join(lines) if lines else ""
+
+    @tool
+    def related(dev: str, address: int) -> str:
+        """List devices that appear with the target."""
+        deps = related_devices(dev, address)
+        return ",".join(deps)
+
+    if Agent:
+        tools = [read_values, program_lines, related]
+        agent = Agent(model="gpt-4o-mini", tools=tools)
+        question = (
+            f"{device}{addr} の不具合原因を調査してください。"
+            "program_lines で命令を確認し、related から次に調べるデバイスを判断し、"
+            "read_values を使って値を取得して推論します。原因が確定したら日本語で"
+            "まとめ、行頭に 'ANSWER:' と付けてください。"
+        )
+        return agent.run(question)
+    else:
+        vals = read_values(device, addr)
+        lines = program_lines(device, addr)
+        deps = related_devices(device, addr)
+        dep_vals = []
+        for d in deps:
+            m = re.match(r"([A-Z]+)(\d+)", d)
+            if not m:
+                continue
+            dv = read_values(m.group(1), int(m.group(2)))
+            dep_vals.append(f"{d}={dv[0]}")
+        prompt = (
+            "対象デバイスの読み取り値:" + vals + "\n" +
+            "関連デバイス:" + ",".join(dep_vals) + "\n" +
+            "プログラム:\n" + lines + "\n原因を推測してください。"
+        )
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "あなたは PLC と生産ライン制御の専門家です。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
+
+
 def create_app():
     app = Flask(__name__, static_folder="../client", static_url_path="")
     app.secret_key = os.getenv("SECRET_KEY", "change-me")
@@ -111,37 +239,9 @@ def create_app():
 
         device = (json_msg.get("device") or "D").upper()
         addr = int(json_msg.get("addr", 100))
-        gw_res = requests.get(
-            f"{GATEWAY_URL}/{device}/{addr}/5",
-            params={"ip": PLC_IP, "port": PLC_PORT},
-        )
-        gw_res.raise_for_status()
-        values = gw_res.json()["values"]
-
-        lines = []
-        for i, v in enumerate(values):
-            key = f"{device}{addr + i}"
-            comment = COMMENTS.get(key)
-            if comment:
-                lines.append(f"{key} = {v} ({comment})")
-            else:
-                lines.append(f"{key} = {v}")
-
-        prompt = (
-            f"以下は PLC {device} の読み取り結果です。\n" + "\n".join(lines)
-            + f"\n\nユーザーからの問い: 『{device}{addr} の値から何を推測できますか？』"
-        )
 
         try:
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "あなたは PLC と生産ライン制御の専門家です。"},
-                    {"role": "user",   "content": prompt}
-                ],
-                temperature=0.2,
-            )
-            answer = resp.choices[0].message.content.strip()
+            answer = run_analysis(device, addr, base_url=GATEWAY_URL, ip=PLC_IP, port=PLC_PORT)
         except Exception as ex:
             answer = f"AI 呼び出しでエラーが発生しました: {ex}"
 
