@@ -30,6 +30,11 @@
   <input id="csv" type="file" accept=".csv" />
   <button id="upload">アップロード</button>
 
+  <br/>
+  <label>PLCプログラム:</label>
+  <input id="prog-files" type="file" accept=".csv" multiple />
+  <button id="prog-upload">アップロード</button>
+
   <pre id="log"></pre>
 
   <script>
@@ -58,6 +63,22 @@
         log("コメントを読み込みました");
       } else {
         log("コメント読み込み失敗");
+      }
+    };
+
+    document.getElementById("prog-upload").onclick = async () => {
+      const files = document.getElementById("prog-files").files;
+      if (files.length === 0) { log("ファイルを選択してください"); return; }
+      const fd = new FormData();
+      for (const f of files) {
+        fd.append("files", f);
+      }
+      const res = await fetch('/api/programs', {method: 'POST', body: fd});
+      if (res.ok) {
+        const json = await res.json();
+        log(`${json.count} 個のプログラムを読み込みました`);
+      } else {
+        log("プログラム読み込み失敗");
       }
     };
 
