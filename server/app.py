@@ -203,6 +203,85 @@ def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -
     result = tpool.execute(_run, agent, question)
     return result.final_output
 
+def search_program(device: str, addr: int) -> list[str]:
+    """Return program lines referencing the given device."""
+    target = f"{device}{addr}"
+    results: list[str] = []
+    for prog in PROGRAMS.values():
+        headers = prog.get("headers", [])
+        rows = prog.get("rows", [])
+        if not rows or "I/O(デバイス)" not in headers:
+            continue
+        io_idx = headers.index("I/O(デバイス)")
+        step_idx = headers.index("ステップ番号") if "ステップ番号" in headers else None
+        inst_idx = headers.index("命令") if "命令" in headers else None
+        note_idx = headers.index("ノート") if "ノート" in headers else None
+        for row in rows:
+            if len(row) <= io_idx:
+                continue
+            if row[io_idx].strip().strip('"') != target:
+                continue
+            parts = []
+            if step_idx is not None and len(row) > step_idx and row[step_idx]:
+                parts.append(f"ステップ{row[step_idx]}")
+            if inst_idx is not None and len(row) > inst_idx and row[inst_idx]:
+                parts.append(row[inst_idx])
+            if note_idx is not None and len(row) > note_idx and row[note_idx]:
+                parts.append(f"({row[note_idx]})")
+            if parts:
+                results.append(" ".join(parts))
+    return results
+
+
+def read_device_values(device: str, addr: int, length: int, *, base_url: str, ip: str, port: str) -> list[int]:
+    """Read device values via gateway."""
+    res = requests.get(
+        f"{base_url}/{device}/{addr}/{length}",
+        params={"ip": ip, "port": port},
+    )
+    res.raise_for_status()
+    return res.json()["values"]
+
+
+def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -> str:
+    """Run autonomous analysis using OpenAI agents if available."""
+
+    @tool
+    def read_values(dev: str, address: int, length: int = 1) -> str:
+        vals = read_device_values(dev, address, length, base_url=base_url, ip=ip, port=port)
+        return ",".join(str(v) for v in vals)
+
+    @tool
+    def program_lines(dev: str, address: int) -> str:
+        lines = search_program(dev, address)
+        return "\n".join(lines) if lines else ""
+
+    if Agent:
+        agent = Agent(model="gpt-4o-mini", tools=[read_values, program_lines])
+        question = (
+            f"{device}{addr} に関する不具合の原因を特定してください。"\
+            "必要に応じてツールを使い、原因が分かったら ANSWER: で始めてください。"
+        )
+        return agent.run(question)
+    else:
+        vals = read_values(device, addr)
+        lines = program_lines(device, addr)
+        prompt = (
+            "以下の読み取り値とプログラム抜粋から原因を推測してください。\n"+
+            f"値: {vals}\n"+
+            f"プログラム:\n{lines}"
+        )
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "あなたは PLC と生産ライン制御の専門家です。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
+
+
 def create_app():
     app = Flask(__name__, static_folder="../client", static_url_path="")
     app.secret_key = os.getenv("SECRET_KEY", "change-me")
