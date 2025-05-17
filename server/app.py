@@ -44,18 +44,19 @@ def create_app():
             emit("reply", {"text": "ログインが必要です"})
             return
 
+        device = (json_msg.get("device") or "D").upper()
         addr = int(json_msg.get("addr", 100))
         gw_res = requests.get(
-            f"{GATEWAY_URL}/{addr}/5",
+            f"{GATEWAY_URL}/{device}/{addr}/5",
             params={"ip": PLC_IP, "port": PLC_PORT},
         )
         gw_res.raise_for_status()
         values = gw_res.json()["values"]
 
         prompt = (
-            f"以下は PLC D レジスタの読み取り結果です。\n"
-            + "\n".join(f"D{addr+i} = {v}" for i, v in enumerate(values))
-            + f"\n\nユーザーからの問い: 『D{addr} の値から何を推測できますか？』"
+            f"以下は PLC {device} の読み取り結果です。\n"
+            + "\n".join(f"{device}{addr+i} = {v}" for i, v in enumerate(values))
+            + f"\n\nユーザーからの問い: 『{device}{addr} の値から何を推測できますか？』"
         )
 
         try:

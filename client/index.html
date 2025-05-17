@@ -15,7 +15,13 @@
 
   <button id="logout">ログアウト</button><br/>
 
-  <label>D レジスタ:</label>
+  <label>デバイス:</label>
+  <select id="device">
+    <option value="D">D</option>
+    <option value="X">X</option>
+    <option value="Y">Y</option>
+    <option value="M">M</option>
+  </select>
   <input id="addr" type="number" value="100" min="0" step="1" />
   <button id="send">送信</button>
 
@@ -27,8 +33,9 @@
 
     document.getElementById("send").onclick = () => {
       const addr = document.getElementById("addr").value;
-      socket.emit("chat", { addr });
-      log(`You > D${addr} を問い合わせました`);
+      const device = document.getElementById("device").value;
+      socket.emit("chat", { device, addr });
+      log(`You > ${device}${addr} を問い合わせました`);
     };
 
     document.getElementById("logout").onclick = async () => {
