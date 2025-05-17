@@ -17,10 +17,27 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=openai.api_key)
 
 COMMENTS: dict[str, str] = {}
+PROGRAMS: dict[str, dict] = {}
+
+def decode_bytes(data: bytes) -> io.StringIO:
+    """Decode uploaded bytes with several fallback encodings."""
+    for enc in ("utf-8-sig", "utf-16", "shift_jis", "cp932"):
+        try:
+            return io.StringIO(data.decode(enc))
+        except UnicodeDecodeError:
+            continue
+    # If all attempts fail, decode with replacement characters
+    return io.StringIO(data.decode("utf-8", errors="replace"))
 
 def load_comments(stream: io.TextIOBase) -> None:
     COMMENTS.clear()
-    reader = csv.reader(stream)
+    sample = stream.read(1024)
+    stream.seek(0)
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
+    except csv.Error:
+        dialect = csv.excel_tab
+    reader = csv.reader(stream, dialect)
     for row in reader:
         if len(row) < 2:
             continue
@@ -29,6 +46,25 @@ def load_comments(stream: io.TextIOBase) -> None:
         if not key or key.lower() in ("test", "\ufefftest", "デバイス名"):
             continue
         COMMENTS[key] = val
+
+def load_program(stream: io.TextIOBase) -> dict:
+    """Load a PLC program CSV into a structured dictionary."""
+    sample = stream.read(1024)
+    stream.seek(0)
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
+    except csv.Error:
+        dialect = csv.excel_tab
+    reader = list(csv.reader(stream, dialect))
+    if not reader:
+        return {}
+    project = reader[0][0].strip().strip('"') if reader[0] else ""
+    model = ""
+    if len(reader) > 1 and len(reader[1]) > 1:
+        model = reader[1][1].strip().strip('"')
+    headers = reader[2] if len(reader) > 2 else []
+    rows = reader[3:] if len(reader) > 3 else []
+    return {"project": project, "model": model, "headers": headers, "rows": rows}
 
 class User(UserMixin):
     def __init__(self, username: str):
@@ -47,8 +83,16 @@ def create_app():
 
     comment_path = os.getenv("COMMENT_CSV")
     if comment_path and os.path.exists(comment_path):
-        with open(comment_path, encoding="utf-8") as f:
-            load_comments(f)
+        with open(comment_path, "rb") as f:
+            load_comments(decode_bytes(f.read()))
+
+    program_paths = os.getenv("PROGRAM_CSVS")
+    if program_paths:
+        for path in program_paths.split(os.pathsep):
+            if not os.path.exists(path):
+                continue
+            with open(path, "rb") as f:
+                PROGRAMS[os.path.basename(path)] = load_program(decode_bytes(f.read()))
 
     USERNAME = os.getenv("APP_USER", "user")
     PASSWORD = os.getenv("APP_PASSWORD", "pass")
@@ -125,9 +169,33 @@ def create_app():
         file = request.files.get("file")
         if not file:
             return jsonify({"result": "ng", "error": "no file"}), 400
-        stream = io.StringIO(file.stream.read().decode("utf-8-sig"))
+        data = file.stream.read()
+        stream = decode_bytes(data)
         load_comments(stream)
         return jsonify({"result": "ok", "count": len(COMMENTS)})
+
+    @app.post("/api/programs")
+    @login_required
+    def upload_programs():
+        files = request.files.getlist("files")
+        if not files:
+            file = request.files.get("file")
+            if file:
+                files = [file]
+        if not files:
+            return jsonify({"result": "ng", "error": "no file"}), 400
+        count = 0
+        for f in files:
+            data = f.stream.read()
+            stream = decode_bytes(data)
+            PROGRAMS[f.filename] = load_program(stream)
+            count += 1
+        return jsonify({"result": "ok", "count": count})
+
+    @app.get("/api/programs")
+    @login_required
+    def list_programs():
+        return jsonify({"programs": list(PROGRAMS.keys())})
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
