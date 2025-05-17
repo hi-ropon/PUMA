@@ -291,6 +291,62 @@ def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -
         return resp.choices[0].message.content.strip()
 
 
+def run_query(question: str, *, base_url: str, ip: str, port: str) -> str:
+    """Answer arbitrary PLC-related questions using OpenAI agents."""
+
+    @tool
+    def read_values(dev: str, address: int, length: int = 1) -> str:
+        vals = read_device_values(dev, address, length, base_url=base_url, ip=ip, port=port)
+        return ",".join(str(v) for v in vals)
+
+    @tool
+    def program_lines(dev: str, address: int) -> str:
+        return "\n".join(search_program(dev, address, context=2))
+
+    @tool
+    def related(dev: str, address: int) -> str:
+        return ",".join(related_devices(dev, address))
+
+    @tool
+    def comment(dev: str, address: int) -> str:
+        return get_comment(dev, address)
+
+    tools = [read_values, program_lines, related, comment]
+
+    agent = Agent(
+        name="PLC-Assistant",
+        instructions=(
+            "あなたはPLCと生産ライン制御の専門家です。"
+            "ユーザーからの質問に答えるため、必要に応じてデバイス値やコメント、プログラムを参照してください。"
+            "最終的な回答は『ANSWER: 'で始める日本語の要約としてください。"
+        ),
+        model="o4-mini",
+        tools=tools,
+        output_type=str,
+    )
+
+    def _run(a, q, turns: int):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return Runner.run_sync(a, input=q, max_turns=turns)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    try:
+        result = tpool.execute(_run, agent, question, 25)
+        return result.final_output
+    except MaxTurnsExceeded:
+        try:
+            result = tpool.execute(_run, agent, question, 50)
+            return result.final_output
+        except Exception as ex:
+            return f"AI 呼び出しでエラーが発生しました: {ex}"
+    except Exception as ex:
+        return f"AI 呼び出しでエラーが発生しました: {ex}"
+
+
 def create_app():
     app = Flask(__name__, static_folder="../client", static_url_path="")
     app.secret_key = os.getenv("SECRET_KEY", "change-me")
@@ -329,13 +385,19 @@ def create_app():
             emit("reply", {"text": "ログインが必要です"})
             return
 
-        device = (json_msg.get("device") or "D").upper()
-        addr = int(json_msg.get("addr", 100))
-
-        try:
-            answer = run_analysis(device, addr, base_url=GATEWAY_URL, ip=PLC_IP, port=PLC_PORT)
-        except Exception as ex:
-            answer = f"AI 呼び出しでエラーが発生しました: {ex}"
+        text = json_msg.get("text")
+        if text:
+            try:
+                answer = run_query(text, base_url=GATEWAY_URL, ip=PLC_IP, port=PLC_PORT)
+            except Exception as ex:
+                answer = f"AI 呼び出しでエラーが発生しました: {ex}"
+        else:
+            device = (json_msg.get("device") or "D").upper()
+            addr = int(json_msg.get("addr", 100))
+            try:
+                answer = run_analysis(device, addr, base_url=GATEWAY_URL, ip=PLC_IP, port=PLC_PORT)
+            except Exception as ex:
+                answer = f"AI 呼び出しでエラーが発生しました: {ex}"
 
         emit("reply", {"text": answer})
 
