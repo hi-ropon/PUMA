@@ -35,3 +35,14 @@ def api_read(req: ReadRequest):
         import traceback, sys
         traceback.print_exc(file=sys.stdout)
         raise HTTPException(status_code=500, detail=f"PLC read error: {ex}")
+
+
+@app.get("/api/read/{addr}/{length}")
+def api_read_get(addr: int, length: int):
+    try:
+        values = read_plc(addr, length)
+        return {"values": values}
+    except Exception as ex:
+        import traceback, sys
+        traceback.print_exc(file=sys.stdout)
+        raise HTTPException(status_code=500, detail=f"PLC read error: {ex}")

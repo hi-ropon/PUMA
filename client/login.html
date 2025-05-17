@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Login</title>
+  <style>
+    body { font-family: sans-serif; margin:2rem; }
+  </style>
+</head>
+<body>
+  <h1>ログイン</h1>
+  <form id="login-form">
+    <label>ユーザー名: <input name="username" /></label><br/>
+    <label>パスワード: <input name="password" type="password" /></label><br/>
+    <button type="submit">ログイン</button>
+  </form>
+  <p id="msg" style="color:red"></p>
+  <script>
+    document.getElementById('login-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const res = await fetch('/login', {method:'POST', body: fd});
+      if (res.ok) {
+        location.href = '/';
+      } else {
+        document.getElementById('msg').textContent = 'ログイン失敗';
+      }
+    };
+  </script>
+</body>
+</html>
