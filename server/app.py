@@ -8,7 +8,7 @@ import io
 import re
 import asyncio
 import httpx 
-import openai                                     # グローバル参照用
+import openai
 from dotenv import load_dotenv
 from openai import OpenAI
 from flask import Flask, jsonify, request, send_from_directory
@@ -17,6 +17,7 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 import requests
 from agents import Agent, Runner, function_tool as tool
 from agents import RunConfig, ModelSettings
+from agents.exceptions import MaxTurnsExceeded
 
 # ──────────────────── OpenAI 初期化 ────────────────────
 load_dotenv()
@@ -125,7 +126,7 @@ def search_program(device: str, addr: int, context: int = 0) -> list[str]:
     return results
 
 
-def related_devices(device: str, addr: int, context: int = 2) -> list[str]:
+def related_devices(device: str, addr: int, context: int = 10) -> list[str]:
     """Return devices appearing near the target in the program."""
     pattern = re.compile(r"[XYMDTS]\d+")
     lines = search_program(device, addr, context=context)
@@ -175,33 +176,41 @@ def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -
 
     tools = [read_values, program_lines, related, comment]
 
-    # 必須パラメータ name と instructions を追加
     agent = Agent(
         name="PLC-Diagnostics",
         instructions=(
             "あなたは三菱シーケンサD/M/X/Yデバイスの不具合を調査するエージェントです。"
             "得られた値やコメント、プログラムの命令から原因を推論し、"
             "最後に『ANSWER: ....』形式で日本語要約を返答してください。"
-            "調査するデバイスはコメントを取得して、回答内容を推論すること"
+            "推論のなかで追加で調査するデバイスはコメントを取得してから調査してください。"
         ),
         model="o4-mini",
         tools=tools,
+        output_type=str,
     )
 
     question = f"{device}{addr} の不具合原因を調査してください。"
 
-    def _run(a, q):
+    def _run(a, q, turns: int):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return Runner.run_sync(a, input=q)
+            return Runner.run_sync(a, input=q, max_turns=turns)
         finally:
             asyncio.set_event_loop(None)
             loop.close()
 
-    # eventlet スレッドプールで実行
-    result = tpool.execute(_run, agent, question)
-    return result.final_output
+    try:
+        result = tpool.execute(_run, agent, question, 25)
+        return result.final_output
+    except MaxTurnsExceeded:
+        try:
+            result = tpool.execute(_run, agent, question, 50)
+            return result.final_output
+        except Exception as ex:
+            return f"AI 呼び出しでエラーが発生しました: {ex}"
+    except Exception as ex:
+        return f"AI 呼び出しでエラーが発生しました: {ex}"
 
 def create_app():
     app = Flask(__name__, static_folder="../client", static_url_path="")
