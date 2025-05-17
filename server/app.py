@@ -181,7 +181,7 @@ def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -
 
     if Agent:
         tools = [read_values, program_lines, related, comment]
-        agent = Agent(model="gpt-4o-mini", tools=tools)
+        agent = Agent(model="o4-mini", tools=tools)
         target_comm = get_comment(device, addr)
         question = (
             f"{device}{addr}({target_comm}) の不具合原因を調査してください。"
