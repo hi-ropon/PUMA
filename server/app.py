@@ -26,6 +26,8 @@ def create_app():
     login_manager = LoginManager(app)
     login_manager.login_view = "login"
     GATEWAY_URL = os.getenv("GATEWAY_URL", "http://127.0.0.1:8001/api/read")
+    PLC_IP = os.getenv("PLC_IP", "127.0.0.1")
+    PLC_PORT = os.getenv("PLC_PORT", "5511")
 
     USERNAME = os.getenv("APP_USER", "user")
     PASSWORD = os.getenv("APP_PASSWORD", "pass")
@@ -43,7 +45,10 @@ def create_app():
             return
 
         addr = int(json_msg.get("addr", 100))
-        gw_res = requests.get(f"{GATEWAY_URL}/{addr}/5")
+        gw_res = requests.get(
+            f"{GATEWAY_URL}/{addr}/5",
+            params={"ip": PLC_IP, "port": PLC_PORT},
+        )
         gw_res.raise_for_status()
         values = gw_res.json()["values"]
 
