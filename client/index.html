@@ -13,20 +13,52 @@
 <body>
   <h1>PLC チャット (ローカルプロトタイプ)</h1>
 
-  <label>D レジスタ:</label>
+  <button id="logout">ログアウト</button><br/>
+
+  <label>デバイス:</label>
+  <select id="device">
+    <option value="D">D</option>
+    <option value="X">X</option>
+    <option value="Y">Y</option>
+    <option value="M">M</option>
+  </select>
   <input id="addr" type="number" value="100" min="0" step="1" />
   <button id="send">送信</button>
+
+  <br/>
+  <label>コメントCSV:</label>
+  <input id="csv" type="file" accept=".csv" />
+  <button id="upload">アップロード</button>
 
   <pre id="log"></pre>
 
   <script>
-    const socket = io("http://127.0.0.1:8000");
+    const socket = io();
     const log = (txt) => { const p = document.getElementById("log"); p.textContent += txt + "\n"; p.scrollTop = p.scrollHeight; };
 
     document.getElementById("send").onclick = () => {
       const addr = document.getElementById("addr").value;
-      socket.emit("chat", { addr });
-      log(`You > D${addr} を問い合わせました`);
+      const device = document.getElementById("device").value;
+      socket.emit("chat", { device, addr });
+      log(`You > ${device}${addr} を問い合わせました`);
+    };
+
+    document.getElementById("logout").onclick = async () => {
+      await fetch('/logout', {method: 'POST'});
+      location.href = '/login.html';
+    };
+
+    document.getElementById("upload").onclick = async () => {
+      const file = document.getElementById("csv").files[0];
+      if (!file) { log("ファイルを選択してください"); return; }
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch('/api/comments', {method: 'POST', body: fd});
+      if (res.ok) {
+        log("コメントを読み込みました");
+      } else {
+        log("コメント読み込み失敗");
+      }
     };
 
     socket.on("reply", (data) => log(`AI > ${data.text}`));
