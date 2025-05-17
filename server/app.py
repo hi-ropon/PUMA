@@ -1,28 +1,35 @@
+import eventlet
+eventlet.monkey_patch()
+from eventlet import tpool
+
 import os
 import csv
 import io
-import json
 import re
+import asyncio
+import httpx 
 import openai                                     # グローバル参照用
 from dotenv import load_dotenv
 from openai import OpenAI
-import eventlet
-eventlet.monkey_patch()
-
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import requests
+from agents import Agent, Runner, function_tool as tool
+from agents import RunConfig, ModelSettings
 
-from openai_agents import Agent, tool
-
+# ──────────────────── OpenAI 初期化 ────────────────────
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=openai.api_key)
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    timeout=httpx.Timeout(60.0, read=None)
+)
 
 COMMENTS: dict[str, str] = {}
 PROGRAMS: dict[str, dict] = {}
 
+# ──────────────────── ユーティリティ群 ────────────────────
 def get_comment(device: str, addr: int) -> str:
     """Return comment text for the given device address."""
     return COMMENTS.get(f"{device}{addr}", "")
@@ -78,7 +85,7 @@ class User(UserMixin):
     def __init__(self, username: str):
         self.id = username
 
-
+# ──────────────────── PLC 検索ヘルパ ────────────────────
 def search_program(device: str, addr: int, context: int = 0) -> list[str]:
     """Return program lines referencing the given device with optional context."""
     target = f"{device}{addr}"
@@ -144,47 +151,57 @@ def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -
     """Run autonomous analysis using OpenAI agents if available."""
 
     @tool
-    def read_values(dev: str, address: int, length: int = 1) -> str:
-        """Read PLC device values."""
-        vals = read_device_values(dev, address, length, base_url=base_url, ip=ip, port=port)
-        result = ",".join(str(v) for v in vals)
-        print(f"read_values -> {dev}{address}: {result}")
-        return result
+    def read_values(dev: str, address: int, length: int) -> str:
+        """PLCデバイスの値を読み取ります。"""
+        length = length or 1
+        vals = read_device_values(dev, address, length,
+                                  base_url=base_url, ip=ip, port=port)
+        return ",".join(str(v) for v in vals)
 
     @tool
     def program_lines(dev: str, address: int) -> str:
-        """Return program excerpt around the device."""
-        lines = search_program(dev, address, context=2)
-        result = "\n".join(lines) if lines else ""
-        print(f"program_lines -> {dev}{address}: {result}")
-        return result
+        """デバイス周辺のプログラム行を返します。"""
+        return "\n".join(search_program(dev, address, context=2))
 
     @tool
     def related(dev: str, address: int) -> str:
-        """List devices that appear with the target."""
-        deps = related_devices(dev, address)
-        result = ",".join(deps)
-        print(f"related -> {dev}{address}: {result}")
-        return result
+        """対象と一緒に使われているデバイス一覧。"""
+        return ",".join(related_devices(dev, address))
 
     @tool
     def comment(dev: str, address: int) -> str:
-        """Return comment for the device."""
-        text = get_comment(dev, address)
-        print(f"comment -> {dev}{address}: {text}")
-        return text
+        """デバイスにつけたコメントを返します。"""
+        return get_comment(dev, address)
 
     tools = [read_values, program_lines, related, comment]
-    agent = Agent(model="o4-mini", tools=tools)
-    target_comm = get_comment(device, addr)
-    question = (
-        f"{device}{addr}({target_comm}) の不具合原因を調査してください。"
-        "program_lines で命令を確認し、related から次に調べるデバイスを判断し、"
-        "read_values と comment を使って値とコメントを参照しながら推論します。"
-        "原因が確定したら日本語でまとめ、行頭に 'ANSWER:' と付けてください。"
-    )
-    return agent.run(question)
 
+    # 必須パラメータ name と instructions を追加
+    agent = Agent(
+        name="PLC-Diagnostics",
+        instructions=(
+            "あなたは三菱シーケンサD/M/X/Yデバイスの不具合を調査するエージェントです。"
+            "得られた値やコメント、プログラムの命令から原因を推論し、"
+            "最後に『ANSWER: ....』形式で日本語要約を返答してください。"
+            "調査するデバイスはコメントを取得して、回答内容を推論すること"
+        ),
+        model="o4-mini",
+        tools=tools,
+    )
+
+    question = f"{device}{addr} の不具合原因を調査してください。"
+
+    def _run(a, q):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return Runner.run_sync(a, input=q)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    # eventlet スレッドプールで実行
+    result = tpool.execute(_run, agent, question)
+    return result.final_output
 
 def create_app():
     app = Flask(__name__, static_folder="../client", static_url_path="")
