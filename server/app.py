@@ -30,7 +30,13 @@ def decode_bytes(data: bytes) -> io.StringIO:
 
 def load_comments(stream: io.TextIOBase) -> None:
     COMMENTS.clear()
-    reader = csv.reader(stream)
+    sample = stream.read(1024)
+    stream.seek(0)
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
+    except csv.Error:
+        dialect = csv.excel_tab
+    reader = csv.reader(stream, dialect)
     for row in reader:
         if len(row) < 2:
             continue
