@@ -1,6 +1,7 @@
 import os
 import csv
 import io
+import json
 import openai                                     # グローバル参照用
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -11,6 +12,13 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import requests
+
+try:
+    from openai_agents import Agent, tool
+except Exception:  # pragma: no cover - optional dependency
+    Agent = None
+    def tool(func):
+        return func
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -71,6 +79,85 @@ class User(UserMixin):
         self.id = username
 
 
+def search_program(device: str, addr: int) -> list[str]:
+    """Return program lines referencing the given device."""
+    target = f"{device}{addr}"
+    results: list[str] = []
+    for prog in PROGRAMS.values():
+        headers = prog.get("headers", [])
+        rows = prog.get("rows", [])
+        if not rows or "I/O(デバイス)" not in headers:
+            continue
+        io_idx = headers.index("I/O(デバイス)")
+        step_idx = headers.index("ステップ番号") if "ステップ番号" in headers else None
+        inst_idx = headers.index("命令") if "命令" in headers else None
+        note_idx = headers.index("ノート") if "ノート" in headers else None
+        for row in rows:
+            if len(row) <= io_idx:
+                continue
+            if row[io_idx].strip().strip('"') != target:
+                continue
+            parts = []
+            if step_idx is not None and len(row) > step_idx and row[step_idx]:
+                parts.append(f"ステップ{row[step_idx]}")
+            if inst_idx is not None and len(row) > inst_idx and row[inst_idx]:
+                parts.append(row[inst_idx])
+            if note_idx is not None and len(row) > note_idx and row[note_idx]:
+                parts.append(f"({row[note_idx]})")
+            if parts:
+                results.append(" ".join(parts))
+    return results
+
+
+def read_device_values(device: str, addr: int, length: int, *, base_url: str, ip: str, port: str) -> list[int]:
+    """Read device values via gateway."""
+    res = requests.get(
+        f"{base_url}/{device}/{addr}/{length}",
+        params={"ip": ip, "port": port},
+    )
+    res.raise_for_status()
+    return res.json()["values"]
+
+
+def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -> str:
+    """Run autonomous analysis using OpenAI agents if available."""
+
+    @tool
+    def read_values(dev: str, address: int, length: int = 1) -> str:
+        vals = read_device_values(dev, address, length, base_url=base_url, ip=ip, port=port)
+        return ",".join(str(v) for v in vals)
+
+    @tool
+    def program_lines(dev: str, address: int) -> str:
+        lines = search_program(dev, address)
+        return "\n".join(lines) if lines else ""
+
+    if Agent:
+        agent = Agent(model="gpt-4o-mini", tools=[read_values, program_lines])
+        question = (
+            f"{device}{addr} に関する不具合の原因を特定してください。"\
+            "必要に応じてツールを使い、原因が分かったら ANSWER: で始めてください。"
+        )
+        return agent.run(question)
+    else:
+        vals = read_values(device, addr)
+        lines = program_lines(device, addr)
+        prompt = (
+            "以下の読み取り値とプログラム抜粋から原因を推測してください。\n"+
+            f"値: {vals}\n"+
+            f"プログラム:\n{lines}"
+        )
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "あなたは PLC と生産ライン制御の専門家です。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
+
+
 def create_app():
     app = Flask(__name__, static_folder="../client", static_url_path="")
     app.secret_key = os.getenv("SECRET_KEY", "change-me")
@@ -111,37 +198,9 @@ def create_app():
 
         device = (json_msg.get("device") or "D").upper()
         addr = int(json_msg.get("addr", 100))
-        gw_res = requests.get(
-            f"{GATEWAY_URL}/{device}/{addr}/5",
-            params={"ip": PLC_IP, "port": PLC_PORT},
-        )
-        gw_res.raise_for_status()
-        values = gw_res.json()["values"]
-
-        lines = []
-        for i, v in enumerate(values):
-            key = f"{device}{addr + i}"
-            comment = COMMENTS.get(key)
-            if comment:
-                lines.append(f"{key} = {v} ({comment})")
-            else:
-                lines.append(f"{key} = {v}")
-
-        prompt = (
-            f"以下は PLC {device} の読み取り結果です。\n" + "\n".join(lines)
-            + f"\n\nユーザーからの問い: 『{device}{addr} の値から何を推測できますか？』"
-        )
 
         try:
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "あなたは PLC と生産ライン制御の専門家です。"},
-                    {"role": "user",   "content": prompt}
-                ],
-                temperature=0.2,
-            )
-            answer = resp.choices[0].message.content.strip()
+            answer = run_analysis(device, addr, base_url=GATEWAY_URL, ip=PLC_IP, port=PLC_PORT)
         except Exception as ex:
             answer = f"AI 呼び出しでエラーが発生しました: {ex}"
 
