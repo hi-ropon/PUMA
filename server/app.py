@@ -18,6 +18,16 @@ client = OpenAI(api_key=openai.api_key)
 
 COMMENTS: dict[str, str] = {}
 
+def decode_bytes(data: bytes) -> io.StringIO:
+    """Decode uploaded bytes with several fallback encodings."""
+    for enc in ("utf-8-sig", "utf-16", "shift_jis", "cp932"):
+        try:
+            return io.StringIO(data.decode(enc))
+        except UnicodeDecodeError:
+            continue
+    # If all attempts fail, decode with replacement characters
+    return io.StringIO(data.decode("utf-8", errors="replace"))
+
 def load_comments(stream: io.TextIOBase) -> None:
     COMMENTS.clear()
     reader = csv.reader(stream)
@@ -47,8 +57,8 @@ def create_app():
 
     comment_path = os.getenv("COMMENT_CSV")
     if comment_path and os.path.exists(comment_path):
-        with open(comment_path, encoding="utf-8") as f:
-            load_comments(f)
+        with open(comment_path, "rb") as f:
+            load_comments(decode_bytes(f.read()))
 
     USERNAME = os.getenv("APP_USER", "user")
     PASSWORD = os.getenv("APP_PASSWORD", "pass")
@@ -125,7 +135,8 @@ def create_app():
         file = request.files.get("file")
         if not file:
             return jsonify({"result": "ng", "error": "no file"}), 400
-        stream = io.StringIO(file.stream.read().decode("utf-8-sig"))
+        data = file.stream.read()
+        stream = decode_bytes(data)
         load_comments(stream)
         return jsonify({"result": "ok", "count": len(COMMENTS)})
 
