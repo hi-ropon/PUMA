@@ -1,31 +1,38 @@
+import eventlet
+eventlet.monkey_patch()
+from eventlet import tpool
+
 import os
 import csv
 import io
-import json
+import re
+import asyncio
+import httpx 
 import openai                                     # グローバル参照用
 from dotenv import load_dotenv
 from openai import OpenAI
-import eventlet
-eventlet.monkey_patch()
-
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import requests
+from agents import Agent, Runner, function_tool as tool
+from agents import RunConfig, ModelSettings
 
-try:
-    from openai_agents import Agent, tool
-except Exception:  # pragma: no cover - optional dependency
-    Agent = None
-    def tool(func):
-        return func
-
+# ──────────────────── OpenAI 初期化 ────────────────────
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=openai.api_key)
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    timeout=httpx.Timeout(60.0, read=None)
+)
 
 COMMENTS: dict[str, str] = {}
 PROGRAMS: dict[str, dict] = {}
+
+# ──────────────────── ユーティリティ群 ────────────────────
+def get_comment(device: str, addr: int) -> str:
+    """Return comment text for the given device address."""
+    return COMMENTS.get(f"{device}{addr}", "")
 
 def decode_bytes(data: bytes) -> io.StringIO:
     """Decode uploaded bytes with several fallback encodings."""
@@ -78,6 +85,123 @@ class User(UserMixin):
     def __init__(self, username: str):
         self.id = username
 
+# ──────────────────── PLC 検索ヘルパ ────────────────────
+def search_program(device: str, addr: int, context: int = 0) -> list[str]:
+    """Return program lines referencing the given device with optional context."""
+    target = f"{device}{addr}"
+    results: list[str] = []
+    for prog in PROGRAMS.values():
+        headers = prog.get("headers", [])
+        rows = prog.get("rows", [])
+        if not rows or "I/O(デバイス)" not in headers:
+            continue
+        io_idx = headers.index("I/O(デバイス)")
+        step_idx = headers.index("ステップ番号") if "ステップ番号" in headers else None
+        inst_idx = headers.index("命令") if "命令" in headers else None
+        note_idx = headers.index("ノート") if "ノート" in headers else None
+        for i, row in enumerate(rows):
+            if len(row) <= io_idx:
+                continue
+            if row[io_idx].strip().strip('"') != target:
+                continue
+            start = max(0, i - context)
+            for j in range(start, i + 1):
+                ctx = rows[j]
+                if len(ctx) <= io_idx:
+                    continue
+                parts = []
+                if step_idx is not None and len(ctx) > step_idx and ctx[step_idx]:
+                    parts.append(f"ステップ{ctx[step_idx]}")
+                if inst_idx is not None and len(ctx) > inst_idx and ctx[inst_idx]:
+                    parts.append(ctx[inst_idx])
+                if len(ctx) > io_idx and ctx[io_idx]:
+                    parts.append(ctx[io_idx])
+                if note_idx is not None and len(ctx) > note_idx and ctx[note_idx]:
+                    parts.append(f"({ctx[note_idx]})")
+                if parts:
+                    line = " ".join(parts)
+                    if line not in results:
+                        results.append(line)
+    return results
+
+
+def related_devices(device: str, addr: int, context: int = 2) -> list[str]:
+    """Return devices appearing near the target in the program."""
+    pattern = re.compile(r"[XYMDTS]\d+")
+    lines = search_program(device, addr, context=context)
+    deps: set[str] = set()
+    for line in lines:
+        for m in pattern.findall(line):
+            if m != f"{device}{addr}":
+                deps.add(m)
+    return sorted(deps)
+
+
+def read_device_values(device: str, addr: int, length: int, *, base_url: str, ip: str, port: str) -> list[int]:
+    """Read device values via gateway."""
+    res = requests.get(
+        f"{base_url}/{device}/{addr}/{length}",
+        params={"ip": ip, "port": port},
+    )
+    res.raise_for_status()
+    return res.json()["values"]
+
+
+def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -> str:
+    """Run autonomous analysis using OpenAI agents if available."""
+
+    @tool
+    def read_values(dev: str, address: int, length: int) -> str:
+        """PLCデバイスの値を読み取ります。"""
+        length = length or 1
+        vals = read_device_values(dev, address, length,
+                                  base_url=base_url, ip=ip, port=port)
+        return ",".join(str(v) for v in vals)
+
+    @tool
+    def program_lines(dev: str, address: int) -> str:
+        """デバイス周辺のプログラム行を返します。"""
+        return "\n".join(search_program(dev, address, context=2))
+
+    @tool
+    def related(dev: str, address: int) -> str:
+        """対象と一緒に使われているデバイス一覧。"""
+        return ",".join(related_devices(dev, address))
+
+    @tool
+    def comment(dev: str, address: int) -> str:
+        """デバイスにつけたコメントを返します。"""
+        return get_comment(dev, address)
+
+    tools = [read_values, program_lines, related, comment]
+
+    # 必須パラメータ name と instructions を追加
+    agent = Agent(
+        name="PLC-Diagnostics",
+        instructions=(
+            "あなたは三菱シーケンサD/M/X/Yデバイスの不具合を調査するエージェントです。"
+            "得られた値やコメント、プログラムの命令から原因を推論し、"
+            "最後に『ANSWER: ....』形式で日本語要約を返答してください。"
+            "調査するデバイスはコメントを取得して、回答内容を推論すること"
+        ),
+        model="o4-mini",
+        tools=tools,
+    )
+
+    question = f"{device}{addr} の不具合原因を調査してください。"
+
+    def _run(a, q):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return Runner.run_sync(a, input=q)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    # eventlet スレッドプールで実行
+    result = tpool.execute(_run, agent, question)
+    return result.final_output
 
 def search_program(device: str, addr: int) -> list[str]:
     """Return program lines referencing the given device."""
