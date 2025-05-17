@@ -28,6 +28,7 @@ client = OpenAI(
 )
 
 COMMENTS: dict[str, str] = {}
+COMMENT_EMBEDS: dict[str, list[float]] = {}
 PROGRAMS: dict[str, dict] = {}
 
 # ──────────────────── ユーティリティ群 ────────────────────
@@ -46,6 +47,7 @@ def decode_bytes(data: bytes) -> io.StringIO:
 
 def load_comments(stream: io.TextIOBase) -> None:
     COMMENTS.clear()
+    COMMENT_EMBEDS.clear()
     sample = stream.read(1024)
     stream.seek(0)
     try:
@@ -61,6 +63,32 @@ def load_comments(stream: io.TextIOBase) -> None:
         if not key or key.lower() in ("test", "\ufefftest", "デバイス名"):
             continue
         COMMENTS[key] = val
+    for k, v in COMMENTS.items():
+        try:
+            resp = client.embeddings.create(
+                input=[v], model="text-embedding-3-small"
+            )
+            COMMENT_EMBEDS[k] = resp.data[0].embedding
+        except Exception:
+            COMMENT_EMBEDS[k] = []
+
+def _embed_text(text: str) -> list[float]:
+    """Return embedding vector for text using OpenAI."""
+    resp = client.embeddings.create(input=[text], model="text-embedding-3-small")
+    return resp.data[0].embedding
+
+def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    import math
+
+    if not v1 or not v2:
+        return -1.0
+    dot = sum(a * b for a, b in zip(v1, v2))
+    norm1 = math.sqrt(sum(a * a for a in v1))
+    norm2 = math.sqrt(sum(b * b for b in v2))
+    if norm1 == 0 or norm2 == 0:
+        return -1.0
+    return dot / (norm1 * norm2)
 
 def load_program(stream: io.TextIOBase) -> dict:
     """Load a PLC program CSV into a structured dictionary."""
@@ -146,8 +174,8 @@ def read_device_values(device: str, addr: int, length: int,
     return res.json()["values"]
 
 # ──────────────────── AI 診断メイン ────────────────────
-def run_analysis(device: str, addr: int,
-                 *, base_url: str, ip: str, port: str) -> str:
+def _run_diagnostics(device: str, addr: int,
+                     *, base_url: str, ip: str, port: str) -> str:
     """Run autonomous analysis using OpenAI agents."""
 
     @tool
@@ -214,64 +242,35 @@ def run_analysis(device: str, addr: int,
     except Exception as ex:
         return f"AI 呼び出しでエラーが発生しました: {ex}"
 
-# ──────────────────── 自由質問用 ────────────────────
-def run_query(question: str, *, base_url: str, ip: str, port: str) -> str:
-    """Answer arbitrary PLC-related questions using OpenAI agents."""
+# ──────────────────── 質問解析 ────────────────────
+def run_analysis(question: str, *, base_url: str, ip: str, port: str) -> str:
+    """Search comments for a device related to the question and diagnose."""
 
-    @tool
-    def read_values(dev: str, address: int, length: int) -> str:
-        vals = read_device_values(
-            dev, address, length,
-            base_url=base_url, ip=ip, port=port
-        )
-        return ",".join(str(v) for v in vals)
-
-    @tool
-    def program_lines(dev: str, address: int) -> str:
-        return "\n".join(search_program(dev, address, context=2))
-
-    @tool
-    def related(dev: str, address: int) -> str:
-        return ",".join(related_devices(dev, address))
-
-    @tool
-    def comment(dev: str, address: int) -> str:
-        return get_comment(dev, address)
-
-    tools = [read_values, program_lines, related, comment]
-
-    agent = Agent(
-        name="PLC-Assistant",
-        instructions=(
-            "あなたはPLCと生産ライン制御の専門家です。"
-            "ユーザーからの質問に答えるため、必要に応じてデバイス値やコメント、プログラムを参照してください。"
-            "最終的な回答は『ANSWER: 'で始める日本語の要約としてください。"
-        ),
-        model="o4-mini",
-        tools=tools,
-        output_type=str,
-    )
-
-    def _run(a, q, turns: int):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return Runner.run_sync(a, input=q, max_turns=turns)
-        finally:
-            asyncio.set_event_loop(None)
-            loop.close()
+    if not COMMENTS:
+        return "コメントがロードされていません"
 
     try:
-        result = tpool.execute(_run, agent, question, 25)
-        return result.final_output
-    except MaxTurnsExceeded:
-        try:
-            result = tpool.execute(_run, agent, question, 50)
-            return result.final_output
-        except Exception as ex:
-            return f"AI 呼び出しでエラーが発生しました: {ex}"
+        q_emb = _embed_text(question)
     except Exception as ex:
         return f"AI 呼び出しでエラーが発生しました: {ex}"
+
+    best_dev = None
+    best_sim = -1.0
+    for dev, emb in COMMENT_EMBEDS.items():
+        sim = _cosine_similarity(q_emb, emb)
+        if sim > best_sim:
+            best_sim = sim
+            best_dev = dev
+
+    if not best_dev:
+        return "AI 呼び出しでエラーが発生しました: デバイスを特定できませんでした"
+
+    m = re.match(r"([A-Za-z]+)(\d+)", best_dev)
+    if not m:
+        return "AI 呼び出しでエラーが発生しました: 無効なデバイス指定"
+
+    device, addr = m.group(1).upper(), int(m.group(2))
+    return _run_diagnostics(device, addr, base_url=base_url, ip=ip, port=port)
 
 # ──────────────────── Flask アプリ生成 ────────────────────
 def create_app():
@@ -318,19 +317,15 @@ def create_app():
             return
 
         text = json_msg.get("text")
-        if text:
-            try:
-                answer = run_query(text, base_url=GATEWAY_URL, ip=PLC_IP, port=PLC_PORT)
-            except Exception as ex:
-                answer = f"AI 呼び出しでエラーが発生しました: {ex}"
-        else:
+        if not text:
             device = (json_msg.get("device") or "D").upper()
             addr = int(json_msg.get("addr", 100))
-            try:
-                answer = run_analysis(device, addr,
-                                      base_url=GATEWAY_URL, ip=PLC_IP, port=PLC_PORT)
-            except Exception as ex:
-                answer = f"AI 呼び出しでエラーが発生しました: {ex}"
+            text = f"{device}{addr} の状況を調べてください"
+
+        try:
+            answer = run_analysis(text, base_url=GATEWAY_URL, ip=PLC_IP, port=PLC_PORT)
+        except Exception as ex:
+            answer = f"AI 呼び出しでエラーが発生しました: {ex}"
 
         emit("reply", {"text": answer})
 
