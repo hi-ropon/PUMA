@@ -28,6 +28,10 @@ client = OpenAI(api_key=openai.api_key)
 COMMENTS: dict[str, str] = {}
 PROGRAMS: dict[str, dict] = {}
 
+def get_comment(device: str, addr: int) -> str:
+    """Return comment text for the given device address."""
+    return COMMENTS.get(f"{device}{addr}", "")
+
 def decode_bytes(data: bytes) -> io.StringIO:
     """Decode uploaded bytes with several fallback encodings."""
     for enc in ("utf-8-sig", "utf-16", "shift_jis", "cp932"):
@@ -148,32 +152,47 @@ def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -
     def read_values(dev: str, address: int, length: int = 1) -> str:
         """Read PLC device values."""
         vals = read_device_values(dev, address, length, base_url=base_url, ip=ip, port=port)
-        return ",".join(str(v) for v in vals)
+        result = ",".join(str(v) for v in vals)
+        print(f"read_values -> {dev}{address}: {result}")
+        return result
 
     @tool
     def program_lines(dev: str, address: int) -> str:
         """Return program excerpt around the device."""
         lines = search_program(dev, address, context=2)
-        return "\n".join(lines) if lines else ""
+        result = "\n".join(lines) if lines else ""
+        print(f"program_lines -> {dev}{address}: {result}")
+        return result
 
     @tool
     def related(dev: str, address: int) -> str:
         """List devices that appear with the target."""
         deps = related_devices(dev, address)
-        return ",".join(deps)
+        result = ",".join(deps)
+        print(f"related -> {dev}{address}: {result}")
+        return result
+
+    @tool
+    def comment(dev: str, address: int) -> str:
+        """Return comment for the device."""
+        text = get_comment(dev, address)
+        print(f"comment -> {dev}{address}: {text}")
+        return text
 
     if Agent:
-        tools = [read_values, program_lines, related]
+        tools = [read_values, program_lines, related, comment]
         agent = Agent(model="gpt-4o-mini", tools=tools)
+        target_comm = get_comment(device, addr)
         question = (
-            f"{device}{addr} の不具合原因を調査してください。"
+            f"{device}{addr}({target_comm}) の不具合原因を調査してください。"
             "program_lines で命令を確認し、related から次に調べるデバイスを判断し、"
-            "read_values を使って値を取得して推論します。原因が確定したら日本語で"
-            "まとめ、行頭に 'ANSWER:' と付けてください。"
+            "read_values と comment を使って値とコメントを参照しながら推論します。"
+            "原因が確定したら日本語でまとめ、行頭に 'ANSWER:' と付けてください。"
         )
         return agent.run(question)
     else:
         vals = read_values(device, addr)
+        comm = comment(device, addr)
         lines = program_lines(device, addr)
         deps = related_devices(device, addr)
         dep_vals = []
@@ -182,11 +201,13 @@ def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -
             if not m:
                 continue
             dv = read_values(m.group(1), int(m.group(2)))
-            dep_vals.append(f"{d}={dv[0]}")
+            cm = comment(m.group(1), int(m.group(2)))
+            dep_vals.append(f"{d}={dv[0]}({cm})")
         prompt = (
-            "対象デバイスの読み取り値:" + vals + "\n" +
+            f"対象デバイス:{device}{addr}({comm})\n" +
+            "読み取り値:" + vals + "\n" +
             "関連デバイス:" + ",".join(dep_vals) + "\n" +
-            "プログラム:\n" + lines + "\n原因を推測してください。"
+            "プログラム:\n" + lines + "\nこれらの情報から原因を推測してください。"
         )
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
