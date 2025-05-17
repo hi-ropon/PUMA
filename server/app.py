@@ -14,12 +14,7 @@ from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 import requests
 
-try:
-    from openai_agents import Agent, tool
-except Exception:  # pragma: no cover - optional dependency
-    Agent = None
-    def tool(func):
-        return func
+from openai_agents import Agent, tool
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -179,45 +174,16 @@ def run_analysis(device: str, addr: int, *, base_url: str, ip: str, port: str) -
         print(f"comment -> {dev}{address}: {text}")
         return text
 
-    if Agent:
-        tools = [read_values, program_lines, related, comment]
-        agent = Agent(model="o4-mini", tools=tools)
-        target_comm = get_comment(device, addr)
-        question = (
-            f"{device}{addr}({target_comm}) の不具合原因を調査してください。"
-            "program_lines で命令を確認し、related から次に調べるデバイスを判断し、"
-            "read_values と comment を使って値とコメントを参照しながら推論します。"
-            "原因が確定したら日本語でまとめ、行頭に 'ANSWER:' と付けてください。"
-        )
-        return agent.run(question)
-    else:
-        vals = read_values(device, addr)
-        comm = comment(device, addr)
-        lines = program_lines(device, addr)
-        deps = related_devices(device, addr)
-        dep_vals = []
-        for d in deps:
-            m = re.match(r"([A-Z]+)(\d+)", d)
-            if not m:
-                continue
-            dv = read_values(m.group(1), int(m.group(2)))
-            cm = comment(m.group(1), int(m.group(2)))
-            dep_vals.append(f"{d}={dv[0]}({cm})")
-        prompt = (
-            f"対象デバイス:{device}{addr}({comm})\n" +
-            "読み取り値:" + vals + "\n" +
-            "関連デバイス:" + ",".join(dep_vals) + "\n" +
-            "プログラム:\n" + lines + "\nこれらの情報から原因を推測してください。"
-        )
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "あなたは PLC と生産ライン制御の専門家です。"},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
-        )
-        return resp.choices[0].message.content.strip()
+    tools = [read_values, program_lines, related, comment]
+    agent = Agent(model="o4-mini", tools=tools)
+    target_comm = get_comment(device, addr)
+    question = (
+        f"{device}{addr}({target_comm}) の不具合原因を調査してください。"
+        "program_lines で命令を確認し、related から次に調べるデバイスを判断し、"
+        "read_values と comment を使って値とコメントを参照しながら推論します。"
+        "原因が確定したら日本語でまとめ、行頭に 'ANSWER:' と付けてください。"
+    )
+    return agent.run(question)
 
 
 def create_app():
