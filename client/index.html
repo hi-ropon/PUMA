@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>PLC Chat Prototype</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    #log  { border: 1px solid #ccc; padding: 1rem; height: 200px; overflow-y: auto; margin-top:1rem;}
+    #msg  { width: 12rem; }
+  </style>
+</head>
+<body>
+  <h1>PLC チャット (ローカルプロトタイプ)</h1>
+
+  <label>D レジスタ:</label>
+  <input id="addr" type="number" value="100" min="0" step="1" />
+  <button id="send">送信</button>
+
+  <pre id="log"></pre>
+
+  <script>
+    const socket = io("http://127.0.0.1:8000");
+    const log = (txt) => { const p = document.getElementById("log"); p.textContent += txt + "\n"; p.scrollTop = p.scrollHeight; };
+
+    document.getElementById("send").onclick = () => {
+      const addr = document.getElementById("addr").value;
+      socket.emit("chat", { addr });
+      log(`You > D${addr} を問い合わせました`);
+    };
+
+    socket.on("reply", (data) => log(`AI > ${data.text}`));
+  </script>
+</body>
+</html>
