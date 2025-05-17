@@ -13,6 +13,8 @@
 <body>
   <h1>PLC チャット (ローカルプロトタイプ)</h1>
 
+  <button id="logout">ログアウト</button><br/>
+
   <label>D レジスタ:</label>
   <input id="addr" type="number" value="100" min="0" step="1" />
   <button id="send">送信</button>
@@ -20,13 +22,18 @@
   <pre id="log"></pre>
 
   <script>
-    const socket = io("http://127.0.0.1:8000");
+    const socket = io();
     const log = (txt) => { const p = document.getElementById("log"); p.textContent += txt + "\n"; p.scrollTop = p.scrollHeight; };
 
     document.getElementById("send").onclick = () => {
       const addr = document.getElementById("addr").value;
       socket.emit("chat", { addr });
       log(`You > D${addr} を問い合わせました`);
+    };
+
+    document.getElementById("logout").onclick = async () => {
+      await fetch('/logout', {method: 'POST'});
+      location.href = '/login.html';
     };
 
     socket.on("reply", (data) => log(`AI > ${data.text}`));

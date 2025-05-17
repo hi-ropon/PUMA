@@ -4,4 +4,4 @@ requests
 python-dotenv
 eventlet
 openai
-python-dotenv
+flask-login
