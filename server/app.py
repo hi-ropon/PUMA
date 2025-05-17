@@ -1,4 +1,6 @@
 import os
+import csv
+import io
 import openai                                     # グローバル参照用
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -13,6 +15,20 @@ import requests
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=openai.api_key)
+
+COMMENTS: dict[str, str] = {}
+
+def load_comments(stream: io.TextIOBase) -> None:
+    COMMENTS.clear()
+    reader = csv.reader(stream)
+    for row in reader:
+        if len(row) < 2:
+            continue
+        key = row[0].strip().strip('"')
+        val = row[1].strip().strip('"')
+        if not key or key.lower() in ("test", "\ufefftest", "デバイス名"):
+            continue
+        COMMENTS[key] = val
 
 class User(UserMixin):
     def __init__(self, username: str):
@@ -29,6 +45,11 @@ def create_app():
     PLC_IP = os.getenv("PLC_IP", "127.0.0.1")
     PLC_PORT = os.getenv("PLC_PORT", "5511")
 
+    comment_path = os.getenv("COMMENT_CSV")
+    if comment_path and os.path.exists(comment_path):
+        with open(comment_path, encoding="utf-8") as f:
+            load_comments(f)
+
     USERNAME = os.getenv("APP_USER", "user")
     PASSWORD = os.getenv("APP_PASSWORD", "pass")
 
@@ -44,18 +65,27 @@ def create_app():
             emit("reply", {"text": "ログインが必要です"})
             return
 
+        device = (json_msg.get("device") or "D").upper()
         addr = int(json_msg.get("addr", 100))
         gw_res = requests.get(
-            f"{GATEWAY_URL}/{addr}/5",
+            f"{GATEWAY_URL}/{device}/{addr}/5",
             params={"ip": PLC_IP, "port": PLC_PORT},
         )
         gw_res.raise_for_status()
         values = gw_res.json()["values"]
 
+        lines = []
+        for i, v in enumerate(values):
+            key = f"{device}{addr + i}"
+            comment = COMMENTS.get(key)
+            if comment:
+                lines.append(f"{key} = {v} ({comment})")
+            else:
+                lines.append(f"{key} = {v}")
+
         prompt = (
-            f"以下は PLC D レジスタの読み取り結果です。\n"
-            + "\n".join(f"D{addr+i} = {v}" for i, v in enumerate(values))
-            + f"\n\nユーザーからの問い: 『D{addr} の値から何を推測できますか？』"
+            f"以下は PLC {device} の読み取り結果です。\n" + "\n".join(lines)
+            + f"\n\nユーザーからの問い: 『{device}{addr} の値から何を推測できますか？』"
         )
 
         try:
@@ -88,6 +118,16 @@ def create_app():
     def logout():
         logout_user()
         return jsonify({"result": "ok"})
+
+    @app.post("/api/comments")
+    @login_required
+    def upload_comments():
+        file = request.files.get("file")
+        if not file:
+            return jsonify({"result": "ng", "error": "no file"}), 400
+        stream = io.StringIO(file.stream.read().decode("utf-8-sig"))
+        load_comments(stream)
+        return jsonify({"result": "ok", "count": len(COMMENTS)})
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
