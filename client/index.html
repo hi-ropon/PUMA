@@ -22,12 +22,10 @@
   <br/>
   <label>コメントCSV:</label>
   <input id="csv" type="file" accept=".csv" />
-  <button id="upload">アップロード</button>
 
   <br/>
   <label>PLCプログラム:</label>
   <input id="prog-files" type="file" accept=".csv" multiple />
-  <button id="prog-upload">アップロード</button>
 
   <pre id="log"></pre>
 
@@ -35,20 +33,9 @@
     const socket = io();
     const log = (txt) => { const p = document.getElementById("log"); p.textContent += txt + "\n"; p.scrollTop = p.scrollHeight; };
 
-    document.getElementById("send").onclick = () => {
-      const text = document.getElementById("query").value;
-      socket.emit("chat", { text });
-      log(`You > ${text}`);
-    };
-
-    document.getElementById("logout").onclick = async () => {
-      await fetch('/logout', {method: 'POST'});
-      location.href = '/login.html';
-    };
-
-    document.getElementById("upload").onclick = async () => {
+    async function uploadComments() {
       const file = document.getElementById("csv").files[0];
-      if (!file) { log("ファイルを選択してください"); return; }
+      if (!file) return;
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch('/api/comments', {method: 'POST', body: fd});
@@ -57,11 +44,11 @@
       } else {
         log("コメント読み込み失敗");
       }
-    };
+    }
 
-    document.getElementById("prog-upload").onclick = async () => {
+    async function uploadPrograms() {
       const files = document.getElementById("prog-files").files;
-      if (files.length === 0) { log("ファイルを選択してください"); return; }
+      if (files.length === 0) return;
       const fd = new FormData();
       for (const f of files) {
         fd.append("files", f);
@@ -73,7 +60,21 @@
       } else {
         log("プログラム読み込み失敗");
       }
+    }
+
+    document.getElementById("send").onclick = async () => {
+      await uploadComments();
+      await uploadPrograms();
+      const text = document.getElementById("query").value;
+      socket.emit("chat", { text });
+      log(`You > ${text}`);
     };
+
+    document.getElementById("logout").onclick = async () => {
+      await fetch('/logout', {method: 'POST'});
+      location.href = '/login.html';
+    };
+
 
     socket.on("reply", (data) => log(`AI > ${data.text}`));
   </script>
