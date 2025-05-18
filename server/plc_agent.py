@@ -76,10 +76,18 @@ def load_program(stream: io.TextIOBase) -> dict:
     }
 
 # ──────────────────── プログラム検索 ------------------------------------------
-def search_program(device: str, addr: int, context: int = 0) -> list[str]:
-    """指定デバイスを含む行（前後 context 行付き）を返す。"""
-    target: str = f"{device}{addr}"
-    results: list[str] = []
+def search_program(device: str, addr: int, context: int = 0) -> list[list[str]]:
+    """
+    指定デバイスが出現する *すべての個所* を抽出し、それぞれ
+    前後 context 行を含めた「ブロック」のリストを返す。
+
+    Returns
+    -------
+    list[list[str]]
+        [[ブロック1の行, ...], [ブロック2の行, ...], ...]
+    """
+    target = f"{device}{addr}"
+    blocks: list[list[str]] = []
 
     for prog in PROGRAMS.values():
         headers = prog.get("headers", [])
@@ -98,12 +106,16 @@ def search_program(device: str, addr: int, context: int = 0) -> list[str]:
                 continue
 
             start = max(0, i - context)
-            for j in range(start, i + 1):
+            end   = min(len(rows), i + context + 1)
+
+            block: list[str] = []
+            for j in range(start, end):
                 ctx = rows[j]
                 if len(ctx) <= io_idx:
                     continue
 
                 parts: list[str] = []
+
                 if step_idx is not None and len(ctx) > step_idx and ctx[step_idx]:
                     parts.append(f"ステップ{ctx[step_idx]}")
                 if inst_idx is not None and len(ctx) > inst_idx and ctx[inst_idx]:
@@ -114,11 +126,12 @@ def search_program(device: str, addr: int, context: int = 0) -> list[str]:
                     parts.append(f"({ctx[note_idx]})")
 
                 if parts:
-                    line = " ".join(parts)
-                    if line not in results:
-                        results.append(line)
+                    block.append(" ".join(parts))
 
-    return results
+            if block:                       # 空ブロックは無視
+                blocks.append(block)
+
+    return blocks
 
 
 def related_devices(device: str, addr: int, context: int = 30) -> list[str]:
@@ -126,10 +139,11 @@ def related_devices(device: str, addr: int, context: int = 30) -> list[str]:
     deps: set[str] = set()
     pattern = re.compile(r"[XYMDTS]\d+")
 
-    for line in search_program(device, addr, context):
-        for m in pattern.findall(line):
-            if m != f"{device}{addr}":
-                deps.add(m)
+    for block in search_program(device, addr, context):
+        for line in block:
+            for m in pattern.findall(line):
+                if m != f"{device}{addr}":
+                    deps.add(m)
 
     return sorted(deps)
 
@@ -178,9 +192,19 @@ def _run_diagnostics(
         return ",".join(str(v) for v in vals)
 
     @tool
-    def program_lines(dev: str, address: int) -> str:
-        """周辺プログラム行を返す。"""
-        return "\n".join(search_program(dev, address, context = 30))
+    def program_lines(dev: str, address: int) -> list[str]:
+        """
+        周辺プログラム行を返す。
+
+        戻り値は「ブロック単位に改行結合した文字列」のリスト。
+        例:
+            [
+                "ステップ100 MOV D0 D10\nステップ101 SET M200",
+                "ステップ340 CMP D0 K100\nステップ341 M8011 (過負荷判定)"
+            ]
+        """
+        blocks = search_program(dev, address, context = 30)
+        return ["\n".join(b) for b in blocks]
 
     @tool
     def related(dev: str, address: int) -> str:
@@ -204,9 +228,11 @@ def _run_diagnostics(
         name         = "PLC-Diagnostics",
         instructions = (
             "まず reasoning_device を呼び出して対象デバイスを JSON で取得し、\n"
-            "続けて read_values / program_lines などを用いて不具合原因を推論し、\n"
+            "続けて read_values / program_lines などを用いて推論し、\n"
             "最後に『ANSWER: ...』で日本語の結論だけを出力してください。\n"
-            "推論のなかで追加で調査するデバイスはコメントを取得してから調査してください。"
+            "推論のなかで追加で調査するデバイスはコメントを取得してから調査してください。\n"
+            "不具合調査の場合は、原因は1つとは限らないので、\n"
+            "複数の可能性を挙げて調査してください。\n"
         ),
         model       = "o4-mini",
         tools       = tools,
