@@ -5,9 +5,9 @@
   <title>PLC Chat Prototype</title>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <style>
-    body { font-family: sans-serif; margin: 2rem; }
-    #log  { border: 1px solid #ccc; padding: 1rem; height: 200px; overflow-y: auto; margin-top:1rem;}
-    #msg  { width: 12rem; }
+    body            { font-family: sans-serif; margin: 2rem; }
+    #log             { border: 1px solid #ccc; padding: 1rem; height: 200px; overflow-y: auto; margin-top: 1rem; white-space: pre-wrap; }
+    #query           { width: 20rem; }
   </style>
 </head>
 <body>
@@ -16,66 +16,123 @@
   <button id="logout">ログアウト</button><br/>
 
   <label>質問:</label>
-  <input id="query" type="text" size="40" placeholder="例: D100 の不具合を調べて" />
+  <input id="query" type="text" placeholder="例: D100 の不具合を調べて" />
   <button id="send">送信</button>
 
-  <br/>
-  <label>コメントCSV:</label>
+  <br/><br/>
+
+  <label>コメント CSV:</label>
   <input id="csv" type="file" accept=".csv" />
-  <button id="upload">アップロード</button>
 
   <br/>
-  <label>PLCプログラム:</label>
+
+  <label>PLC プログラム (複数選択可):</label>
   <input id="prog-files" type="file" accept=".csv" multiple />
-  <button id="prog-upload">アップロード</button>
 
   <pre id="log"></pre>
 
   <script>
-    const socket = io();
-    const log = (txt) => { const p = document.getElementById("log"); p.textContent += txt + "\n"; p.scrollTop = p.scrollHeight; };
+    const socket = io({ withCredentials: true });
 
-    document.getElementById("send").onclick = () => {
-      const text = document.getElementById("query").value;
-      socket.emit("chat", { text });
+    function log(txt)
+    {
+      const area = document.getElementById('log');
+      area.textContent += `${txt}\n`;
+      area.scrollTop = area.scrollHeight;
+    }
+
+    // 質問送信 --------------------------------------------------------------
+    document.getElementById('send').onclick = () =>
+    {
+      const text = document.getElementById('query').value;
+      socket.emit('chat', { text });
       log(`You > ${text}`);
     };
 
-    document.getElementById("logout").onclick = async () => {
-      await fetch('/logout', {method: 'POST'});
+    // ログアウト ------------------------------------------------------------
+    document.getElementById('logout').onclick = async () =>
+    {
+      await fetch('/logout', { method: 'POST' });
       location.href = '/login.html';
     };
 
-    document.getElementById("upload").onclick = async () => {
-      const file = document.getElementById("csv").files[0];
-      if (!file) { log("ファイルを選択してください"); return; }
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch('/api/comments', {method: 'POST', body: fd});
-      if (res.ok) {
-        log("コメントを読み込みました");
-      } else {
-        log("コメント読み込み失敗");
+    // コメント CSV アップロード --------------------------------------------
+    async function uploadComments()
+    {
+      const file = document.getElementById('csv').files[0];
+      if (!file)
+      {
+        log('コメント CSV を選択してください');
+        return;
       }
-    };
 
-    document.getElementById("prog-upload").onclick = async () => {
-      const files = document.getElementById("prog-files").files;
-      if (files.length === 0) { log("ファイルを選択してください"); return; }
       const fd = new FormData();
-      for (const f of files) {
-        fd.append("files", f);
-      }
-      const res = await fetch('/api/programs', {method: 'POST', body: fd});
-      if (res.ok) {
-        const json = await res.json();
-        log(`${json.count} 個のプログラムを読み込みました`);
-      } else {
-        log("プログラム読み込み失敗");
-      }
-    };
+      fd.append('file', file);
 
-    socket.on("reply", (data) => log(`AI > ${data.text}`));
+      try
+      {
+        const res = await fetch('/api/comments', { method: 'POST', body: fd });
+        if (res.ok)
+        {
+          const json = await res.json();
+          log(`コメントを読み込みました (${json.count} 件)`);
+        }
+        else
+        {
+          log('コメント読み込み失敗');
+        }
+      }
+      catch (err)
+      {
+        log(`コメント読み込みエラー: ${err}`);
+      }
+    }
+
+    // PLC プログラム アップロード ------------------------------------------
+    async function uploadPrograms()
+    {
+      const files = document.getElementById('prog-files').files;
+      if (files.length === 0)
+      {
+        log('PLC プログラム CSV を選択してください');
+        return;
+      }
+
+      const fd = new FormData();
+      for (const f of files)
+      {
+        // 同名キー files[] で複数添付
+        fd.append('files[]', f);
+      }
+
+      try
+      {
+        const res = await fetch('/api/programs', { method: 'POST', body: fd });
+        if (res.ok)
+        {
+          const json = await res.json();
+          log(`${json.count} 個のプログラムを読み込みました`);
+        }
+        else
+        {
+          log('プログラム読み込み失敗');
+        }
+      }
+      catch (err)
+      {
+        log(`プログラム読み込みエラー: ${err}`);
+      }
+    }
+
+    // 自動アップロード設定 --------------------------------------------------
+    document.getElementById('csv').addEventListener('change', uploadComments);
+    document.getElementById('prog-files').addEventListener('change', uploadPrograms);
+
+    // AI からの返信 ---------------------------------------------------------
+    socket.on('reply', data =>
+    {
+      log(`AI > ${data.text}`);
+    });
   </script>
 </body>
 </html>

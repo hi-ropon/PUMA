@@ -19,7 +19,11 @@
     document.getElementById('login-form').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const res = await fetch('/login', {method:'POST', body: fd});
+      const res = await fetch('/login', {
+        method: 'POST',
+        body: fd,
+        credentials: 'include'
+      });
       if (res.ok) {
         location.href = '/';
       } else {
