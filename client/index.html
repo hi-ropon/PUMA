@@ -6,7 +6,7 @@
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <style>
     body { font-family: sans-serif; margin: 2rem; }
-    #log  { border: 1px solid #ccc; padding: 1rem; height: 200px; overflow-y: auto; margin-top:1rem;}
+    #log  { border: 1px solid #ccc; padding: 1rem; height: 200px; overflow-y: auto; margin-top:1rem; }
     #msg  { width: 12rem; }
   </style>
 </head>
@@ -22,60 +22,134 @@
   <br/>
   <label>コメントCSV:</label>
   <input id="csv" type="file" accept=".csv" />
-  <button id="upload">アップロード</button>
 
   <br/>
   <label>PLCプログラム:</label>
   <input id="prog-files" type="file" accept=".csv" multiple />
-  <button id="prog-upload">アップロード</button>
 
   <pre id="log"></pre>
 
   <script>
     const socket = io({ withCredentials: true });
-    const log = (txt) => { const p = document.getElementById("log"); p.textContent += txt + "\n"; p.scrollTop = p.scrollHeight; };
+    const log = (txt) =>
+    {
+      const p = document.getElementById("log");
+      p.textContent += txt + "\n";
+      p.scrollTop = p.scrollHeight;
+    };
 
-    document.getElementById("send").onclick = () => {
+    // 質問送信
+    document.getElementById("send").onclick = () =>
+    {
       const text = document.getElementById("query").value;
       socket.emit("chat", { text });
       log(`You > ${text}`);
     };
 
-    document.getElementById("logout").onclick = async () => {
-      await fetch('/logout', {method: 'POST'});
+    // ログアウト
+    document.getElementById("logout").onclick = async () =>
+    {
+      await fetch('/logout', { method: 'POST' });
       location.href = '/login.html';
     };
 
-    document.getElementById("upload").onclick = async () => {
+    // コメントCSVアップロード処理
+    const uploadComments = async () =>
+    {
       const file = document.getElementById("csv").files[0];
-      if (!file) { log("ファイルを選択してください"); return; }
+
+      if (!file)
+      {
+        log("ファイルを選択してください");
+        return;
+      }
+
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch('/api/comments', {method: 'POST', body: fd});
-      if (res.ok) {
-        log("コメントを読み込みました");
-      } else {
-        log("コメント読み込み失敗");
+
+      try
+      {
+        const res = await fetch('/api/comments', { method: 'POST', body: fd });
+        if (res.ok)
+        {
+          const json = await res.json();
+          log(`コメントを読み込みました (${json.count} 件)`);
+        }
+        else
+        {
+          log("コメント読み込み失敗");
+        }
+      }
+      catch (err)
+      {
+        log(`コメント読み込みエラー: ${err}`);
       }
     };
 
-    document.getElementById("prog-upload").onclick = async () => {
+    // PLCプログラムアップロード処理
+    const uploadPrograms = async () =>
+    {
       const files = document.getElementById("prog-files").files;
-      if (files.length === 0) { log("ファイルを選択してください"); return; }
+
+      if (files.length === 0)
+      {
+        log("ファイルを選択してください");
+        return;
+      }
+
       const fd = new FormData();
-      for (const f of files) {
+      for (const f of files)
+      {
         fd.append("files", f);
       }
-      const res = await fetch('/api/programs', {method: 'POST', body: fd});
-      if (res.ok) {
-        const json = await res.json();
-        log(`${json.count} 個のプログラムを読み込みました`);
-      } else {
-        log("プログラム読み込み失敗");
+
+      try
+      {
+        const res = await fetch('/api/programs', { method: 'POST', body: fd });
+        if (res.ok)
+        {
+          const json = await res.json();
+          log(`${json.count} 個のプログラムを読み込みました`);
+        }
+        else
+        {
+          log("プログラム読み込み失敗");
+        }
+      }
+      catch (err)
+      {
+        log(`プログラム読み込みエラー: ${err}`);
       }
     };
 
-    socket.on("reply", (data) => log(`AI > ${data.text}`));
+    // コメントCSVファイルが選択されたら自動アップロード
+    document.getElementById("csv").addEventListener("change", () =>
+    {
+      uploadComments();
+    });
+
+    // プログラムファイルが選択されたら自動アップロード
+    document.getElementById("prog-files").addEventListener("change", () =>
+    {
+      uploadPrograms();
+    });
+
+    // 手動アップロードボタン
+    document.getElementById("upload").onclick = () =>
+    {
+      uploadComments();
+    };
+
+    document.getElementById("prog-upload").onclick = () =>
+    {
+      uploadPrograms();
+    };
+
+    // AIからの返信受信
+    socket.on("reply", (data) =>
+    {
+      log(`AI > ${data.text}`);
+    });
   </script>
 </body>
 </html>
