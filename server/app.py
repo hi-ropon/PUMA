@@ -246,6 +246,12 @@ def _run_diagnostics(device: str, addr: int,
 def run_analysis(question: str, *, base_url: str, ip: str, port: str) -> str:
     """Search comments for a device related to the question and diagnose."""
 
+    # コメント CSV が指定されていれば毎回読み込む
+    comment_path = os.getenv("COMMENT_CSV")
+    if comment_path and os.path.exists(comment_path):
+        with open(comment_path, "rb") as f:
+            load_comments(decode_bytes(f.read()))
+
     if not COMMENTS:
         return "コメントがロードされていません"
 
