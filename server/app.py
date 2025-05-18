@@ -1,46 +1,40 @@
 """
-app.py
-=================================
-Flask + SocketIO サーバー。
-
+Flask + SocketIO サーバー (複数 PLC プログラム CSV 対応版)
 """
-
+# ──────────────────── インポート ────────────────────
+from __future__ import annotations
 import eventlet
-eventlet.monkey_patch()          # eventlet を最優先でパッチ
-from eventlet import tpool       # PLC Diagnostics 内でも使用
+eventlet.monkey_patch()
 
 import os
+import threading
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
+from flask_login import (LoginManager, UserMixin, login_user,
+                         logout_user, login_required, current_user)
 from flask_socketio import SocketIO, emit
-from flask_login import (
-    LoginManager,
-    UserMixin,
-    login_user,
-    logout_user,
-    login_required,
-    current_user,
-)
 
 import plc_agent as plc
 import comments_search as hs
 
-# ──────────────────── ユーザークラス ────────────────────
-class User(UserMixin):
-    def __init__(self, username: str):
-        self.id = username
+# ──────────────────── 設定 ────────────────────
+load_dotenv()
+UPLOAD_LIMIT_MB: int = int(os.getenv("MAX_UPLOAD_MB", "25"))
 
-
-# ──────────────────── Flask アプリ生成 ────────────────────
+# ──────────────────── Flask 初期化 ────────────────────
 def create_app():
-    load_dotenv()
-
     app = Flask(__name__, static_folder="../client", static_url_path="")
-    app.secret_key = os.getenv("SECRET_KEY", "change-me")
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "change-me")
+    # アップロード総量制限
+    app.config["MAX_CONTENT_LENGTH"] = UPLOAD_LIMIT_MB * 1024 * 1024
 
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
-    # ───── 認証設定 ─────
+    # ───── Login / User 定義 ─────
+    class User(UserMixin):
+        def __init__(self, username: str):
+            self.id = username
+
     login_manager = LoginManager(app)
     login_manager.login_view = "login"
 
@@ -48,56 +42,51 @@ def create_app():
     PASSWORD = os.getenv("APP_PASSWORD", "pass")
 
     @login_manager.user_loader
-    def load_user(user_id: str):
-        if user_id == USERNAME:
-            return User(user_id)
-        return None
+    def load_user(user_id: str):                        # noqa: D401
+        return User(user_id) if user_id == USERNAME else None
 
-    # ───── PLC / Gateway 接続設定 ─────
-    GATEWAY_URL = os.getenv("GATEWAY_URL", "http://127.0.0.1:8001/api/read")
-    PLC_IP = os.getenv("PLC_IP", "127.0.0.1")
-    PLC_PORT = os.getenv("PLC_PORT", "5511")
+    # ───── グローバルリソース ─────
+    program_lock = threading.Lock()
 
-    # ───── コメント & プログラム事前ロード ─────
+    # ───── 事前ロード (環境変数で複数指定可) ─────
     comment_path = os.getenv("COMMENT_CSV")
     if comment_path and os.path.exists(comment_path):
         with open(comment_path, "rb") as f:
             hs.load_comments(plc.decode_bytes(f.read()))
 
-    program_paths = os.getenv("PROGRAM_CSVS")      # ; 区切り
-    if program_paths:
-        for path in program_paths.split(os.pathsep):
-            if not os.path.exists(path):
-                continue
+    program_paths = (os.getenv("PROGRAM_CSVS") or "").split(os.pathsep)
+    for path in program_paths:
+        if path and os.path.exists(path):
             with open(path, "rb") as f:
                 plc.PROGRAMS[os.path.basename(path)] = plc.load_program(
                     plc.decode_bytes(f.read())
                 )
 
-    # ───── WebSocket ハンドラ ─────
+    # ────────── WebSocket ──────────
     @socketio.on("chat")
     def handle_chat(json_msg):
         if not current_user.is_authenticated:
             emit("reply", {"text": "ログインが必要です"})
             return
 
-        text = json_msg.get("text") or ""
+        text: str = (json_msg or {}).get("text", "")
         if not text:
-            device = (json_msg.get("device") or "D").upper()
-            addr = int(json_msg.get("addr", 100))
-            text = f"{device}{addr} の状況を調べてください"
+            emit("reply", {"text": "質問が空です"})
+            return
 
-        try:
-            answer = plc.run_analysis(text,
-                                      base_url=GATEWAY_URL,
-                                      ip=PLC_IP,
-                                      port=PLC_PORT)
-        except Exception as ex:
-            answer = f"AI 呼び出しでエラーが発生しました: {ex}"
+        GATEWAY_URL = os.getenv("GATEWAY_URL", "http://127.0.0.1:8001/api/read")
+        PLC_IP      = os.getenv("PLC_IP", "127.0.0.1")
+        PLC_PORT    = os.getenv("PLC_PORT", "5511")
 
+        answer = plc.run_analysis(
+            text,
+            base_url=GATEWAY_URL,
+            ip=PLC_IP,
+            port=PLC_PORT,
+        )
         emit("reply", {"text": answer})
 
-    # ───── REST エンドポイント ─────
+    # ────────── REST ──────────
     @app.post("/login")
     def login():
         data = request.get_json(silent=True) or request.form
@@ -125,26 +114,29 @@ def create_app():
     @app.post("/api/programs")
     @login_required
     def upload_programs():
-        files = request.files.getlist("files")
+        files = request.files.getlist("files[]")  # ← フィールド名統一
         if not files:
             return jsonify({"result": "ng", "error": "no file"}), 400
 
-        for f in files:
-            plc.PROGRAMS[f.filename] = plc.load_program(
-                plc.decode_bytes(f.stream.read())
-            )
+        added = 0
+        with program_lock:
+            for f in files:
+                plc.PROGRAMS[f.filename] = plc.load_program(
+                    plc.decode_bytes(f.stream.read())
+                )
+                added += 1
 
-        return jsonify({"result": "ok", "count": len(files)})
+        return jsonify({"result": "ok", "count": added})
 
     @app.get("/api/programs")
     @login_required
     def list_programs():
         return jsonify({"programs": list(plc.PROGRAMS.keys())})
 
-    # ───── SPA 配信用 ─────
+    # SPA 配信 --------------------------------------------------------------
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
-    def serve(path):
+    def serve(path: str):
         full = os.path.join(app.static_folder, path)
         if path and os.path.exists(full):
             return send_from_directory(app.static_folder, path)
@@ -155,7 +147,7 @@ def create_app():
     return app, socketio
 
 
-# ──────────────────── エントリポイント ────────────────────
+# ──────────────────── main ────────────────────
 if __name__ == "__main__":
-    app, socketio = create_app()
-    socketio.run(app, host="127.0.0.1", port=8000, debug=True)
+    application, sio = create_app()
+    sio.run(application, host="127.0.0.1", port=8000, debug=True)
