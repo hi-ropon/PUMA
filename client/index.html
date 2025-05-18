@@ -32,7 +32,7 @@
   <pre id="log"></pre>
 
   <script>
-    const socket = io();
+    const socket = io({ withCredentials: true });
     const log = (txt) => { const p = document.getElementById("log"); p.textContent += txt + "\n"; p.scrollTop = p.scrollHeight; };
 
     document.getElementById("send").onclick = () => {
