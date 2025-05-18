@@ -22,12 +22,10 @@
   <br/>
   <label>コメントCSV:</label>
   <input id="csv" type="file" accept=".csv" />
-  <button id="upload">アップロード</button>
 
   <br/>
   <label>PLCプログラム:</label>
   <input id="prog-files" type="file" accept=".csv" multiple />
-  <button id="prog-upload">アップロード</button>
 
   <pre id="log"></pre>
 
@@ -35,9 +33,24 @@
     const socket = io();
     const log = (txt) => { const p = document.getElementById("log"); p.textContent += txt + "\n"; p.scrollTop = p.scrollHeight; };
 
-    document.getElementById("send").onclick = () => {
+    document.getElementById("send").onclick = async () => {
       const text = document.getElementById("query").value;
-      socket.emit("chat", { text });
+      const readFile = (file) => new Promise(res => {
+        const fr = new FileReader();
+        fr.onload = e => res(e.target.result);
+        fr.readAsText(file);
+      });
+
+      const cfile = document.getElementById("csv").files[0];
+      const comment = cfile ? await readFile(cfile) : null;
+
+      const pfiles = document.getElementById("prog-files").files;
+      const programs = [];
+      for (const f of pfiles) {
+        programs.push({name: f.name, content: await readFile(f)});
+      }
+
+      socket.emit("chat", { text, comment, programs });
       log(`You > ${text}`);
     };
 
@@ -46,34 +59,7 @@
       location.href = '/login.html';
     };
 
-    document.getElementById("upload").onclick = async () => {
-      const file = document.getElementById("csv").files[0];
-      if (!file) { log("ファイルを選択してください"); return; }
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch('/api/comments', {method: 'POST', body: fd});
-      if (res.ok) {
-        log("コメントを読み込みました");
-      } else {
-        log("コメント読み込み失敗");
-      }
-    };
 
-    document.getElementById("prog-upload").onclick = async () => {
-      const files = document.getElementById("prog-files").files;
-      if (files.length === 0) { log("ファイルを選択してください"); return; }
-      const fd = new FormData();
-      for (const f of files) {
-        fd.append("files", f);
-      }
-      const res = await fetch('/api/programs', {method: 'POST', body: fd});
-      if (res.ok) {
-        const json = await res.json();
-        log(`${json.count} 個のプログラムを読み込みました`);
-      } else {
-        log("プログラム読み込み失敗");
-      }
-    };
 
     socket.on("reply", (data) => log(`AI > ${data.text}`));
   </script>

@@ -243,8 +243,12 @@ def _run_diagnostics(device: str, addr: int,
         return f"AI 呼び出しでエラーが発生しました: {ex}"
 
 # ──────────────────── 質問解析 ────────────────────
-def run_analysis(question: str, *, base_url: str, ip: str, port: str) -> str:
+def run_analysis(question: str, *, base_url: str, ip: str, port: str,
+                 comment_csv: str | None = None) -> str:
     """Search comments for a device related to the question and diagnose."""
+
+    if comment_csv is not None:
+        load_comments(io.StringIO(comment_csv))
 
     if not COMMENTS:
         return "コメントがロードされていません"
@@ -322,8 +326,19 @@ def create_app():
             addr = int(json_msg.get("addr", 100))
             text = f"{device}{addr} の状況を調べてください"
 
+        comment_text = json_msg.get("comment")
+        programs = json_msg.get("programs") or []
+        if programs:
+            for prog in programs:
+                name = prog.get("name")
+                content = prog.get("content")
+                if name and content is not None:
+                    PROGRAMS[name] = load_program(io.StringIO(content))
+
         try:
-            answer = run_analysis(text, base_url=GATEWAY_URL, ip=PLC_IP, port=PLC_PORT)
+            answer = run_analysis(text, base_url=GATEWAY_URL,
+                                 ip=PLC_IP, port=PLC_PORT,
+                                 comment_csv=comment_text)
         except Exception as ex:
             answer = f"AI 呼び出しでエラーが発生しました: {ex}"
 
