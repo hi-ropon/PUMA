@@ -6,4 +6,3 @@ eventlet
 openai
 flask-login
 openai-agents
-rank_bm25

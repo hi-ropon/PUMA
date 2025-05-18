@@ -23,7 +23,7 @@ from flask_login import (
 )
 
 import plc_agent as plc
-import hybrid_search as hs
+import comments_search as hs
 
 # ──────────────────── ユーザークラス ────────────────────
 class User(UserMixin):
