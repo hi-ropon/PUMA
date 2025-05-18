@@ -114,12 +114,13 @@ def create_app():
     @app.post("/api/programs")
     @login_required
     def upload_programs():
-        files = request.files.getlist("files[]")  # ← フィールド名統一
+        files = request.files.getlist("files[]")
         if not files:
             return jsonify({"result": "ng", "error": "no file"}), 400
 
         added = 0
         with program_lock:
+            plc.PROGRAMS.clear()
             for f in files:
                 plc.PROGRAMS[f.filename] = plc.load_program(
                     plc.decode_bytes(f.stream.read())
