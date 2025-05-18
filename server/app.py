@@ -18,6 +18,7 @@ from flask_login import LoginManager, UserMixin, login_user, \
 import requests
 from agents import Agent, Runner, function_tool as tool
 from agents.exceptions import MaxTurnsExceeded
+import hybrid_search as hs
 
 # ──────────────────── OpenAI 初期化 ────────────────────
 load_dotenv()
@@ -27,15 +28,9 @@ client = OpenAI(
     timeout=httpx.Timeout(60.0, read=None)
 )
 
-COMMENTS: dict[str, str] = {}
-COMMENT_EMBEDS: dict[str, list[float]] = {}
 PROGRAMS: dict[str, dict] = {}
 
 # ──────────────────── ユーティリティ群 ────────────────────
-def get_comment(device: str, addr: int) -> str:
-    """Return comment text for the given device address."""
-    return COMMENTS.get(f"{device}{addr}", "")
-
 def decode_bytes(data: bytes) -> io.StringIO:
     """Decode uploaded bytes with several fallback encodings."""
     for enc in ("utf-8-sig", "utf-16", "shift_jis", "cp932"):
@@ -44,51 +39,6 @@ def decode_bytes(data: bytes) -> io.StringIO:
         except UnicodeDecodeError:
             continue
     return io.StringIO(data.decode("utf-8", errors="replace"))
-
-def load_comments(stream: io.TextIOBase) -> None:
-    COMMENTS.clear()
-    COMMENT_EMBEDS.clear()
-    sample = stream.read(1024)
-    stream.seek(0)
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
-    except csv.Error:
-        dialect = csv.excel_tab
-    reader = csv.reader(stream, dialect)
-    for row in reader:
-        if len(row) < 2:
-            continue
-        key = row[0].strip().strip('"')
-        val = row[1].strip().strip('"')
-        if not key or key.lower() in ("test", "\ufefftest", "デバイス名"):
-            continue
-        COMMENTS[key] = val
-    for k, v in COMMENTS.items():
-        try:
-            resp = client.embeddings.create(
-                input=[v], model="text-embedding-3-small"
-            )
-            COMMENT_EMBEDS[k] = resp.data[0].embedding
-        except Exception:
-            COMMENT_EMBEDS[k] = []
-
-def _embed_text(text: str) -> list[float]:
-    """Return embedding vector for text using OpenAI."""
-    resp = client.embeddings.create(input=[text], model="text-embedding-3-small")
-    return resp.data[0].embedding
-
-def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    import math
-
-    if not v1 or not v2:
-        return -1.0
-    dot = sum(a * b for a, b in zip(v1, v2))
-    norm1 = math.sqrt(sum(a * a for a in v1))
-    norm2 = math.sqrt(sum(b * b for b in v2))
-    if norm1 == 0 or norm2 == 0:
-        return -1.0
-    return dot / (norm1 * norm2)
 
 def load_program(stream: io.TextIOBase) -> dict:
     """Load a PLC program CSV into a structured dictionary."""
@@ -201,7 +151,7 @@ def _run_diagnostics(device: str, addr: int,
     @tool
     def comment(dev: str, address: int) -> str:
         """デバイスにつけたコメントを返します。"""
-        return get_comment(dev, address)
+        return hs.get_comment(f"{dev}{address}") 
 
     tools = [read_values, program_lines, related, comment]
 
@@ -250,32 +200,17 @@ def run_analysis(question: str, *, base_url: str, ip: str, port: str) -> str:
     comment_path = os.getenv("COMMENT_CSV")
     if comment_path and os.path.exists(comment_path):
         with open(comment_path, "rb") as f:
-            load_comments(decode_bytes(f.read()))
+            hs.load_comments(decode_bytes(f.read()))
 
-    if not COMMENTS:
+    if not hs.COMMENTS:
         return "コメントがロードされていません"
 
-    try:
-        q_emb = _embed_text(question)
-    except Exception as ex:
-        return f"AI 呼び出しでエラーが発生しました: {ex}"
-
-    best_dev = None
-    best_sim = -1.0
-    for dev, emb in COMMENT_EMBEDS.items():
-        sim = _cosine_similarity(q_emb, emb)
-        if sim > best_sim:
-            best_sim = sim
-            best_dev = dev
-
-    if not best_dev:
-        return "AI 呼び出しでエラーが発生しました: デバイスを特定できませんでした"
-
-    m = re.match(r"([A-Za-z]+)(\d+)", best_dev)
-    if not m:
-        return "AI 呼び出しでエラーが発生しました: 無効なデバイス指定"
-
-    device, addr = m.group(1).upper(), int(m.group(2))
+    dev, score = hs.find_best_device(question)
+    if dev is None:
+        return "デバイスを特定できませんでした"
+    device, addr = re.match(r"([A-Za-z]+)(\d+)", dev).groups()
+    device = device.upper()
+    addr = int(addr)
     return _run_diagnostics(device, addr, base_url=base_url, ip=ip, port=port)
 
 # ──────────────────── Flask アプリ生成 ────────────────────
@@ -295,7 +230,7 @@ def create_app():
     comment_path = os.getenv("COMMENT_CSV")
     if comment_path and os.path.exists(comment_path):
         with open(comment_path, "rb") as f:
-            load_comments(decode_bytes(f.read()))
+            hs.load_comments(decode_bytes(f.read()))
 
     program_paths = os.getenv("PROGRAM_CSVS")
     if program_paths:
@@ -359,8 +294,8 @@ def create_app():
         if not file:
             return jsonify({"result": "ng", "error": "no file"}), 400
         data = file.stream.read()
-        load_comments(decode_bytes(data))
-        return jsonify({"result": "ok", "count": len(COMMENTS)})
+        hs.load_comments(decode_bytes(data))
+        return jsonify({"result": "ok", "count": len(hs.COMMENTS)})
 
     @app.post("/api/programs")
     @login_required
