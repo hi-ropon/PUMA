@@ -35,7 +35,19 @@
     const socket = io({ withCredentials: true });
     const log = (txt) => { const p = document.getElementById("log"); p.textContent += txt + "\n"; p.scrollTop = p.scrollHeight; };
 
-    document.getElementById("send").onclick = () => {
+    async function uploadCommentsIfSelected() {
+      const file = document.getElementById("csv").files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch('/api/comments', {method: 'POST', body: fd});
+      if (!res.ok) {
+        log("コメント読み込み失敗");
+      }
+    }
+
+    document.getElementById("send").onclick = async () => {
+      await uploadCommentsIfSelected();
       const text = document.getElementById("query").value;
       socket.emit("chat", { text });
       log(`You > ${text}`);
@@ -49,14 +61,8 @@
     document.getElementById("upload").onclick = async () => {
       const file = document.getElementById("csv").files[0];
       if (!file) { log("ファイルを選択してください"); return; }
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch('/api/comments', {method: 'POST', body: fd});
-      if (res.ok) {
-        log("コメントを読み込みました");
-      } else {
-        log("コメント読み込み失敗");
-      }
+      await uploadCommentsIfSelected();
+      log("コメントを読み込みました");
     };
 
     document.getElementById("prog-upload").onclick = async () => {
