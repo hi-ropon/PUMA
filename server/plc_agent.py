@@ -32,7 +32,7 @@ load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
 client = openai.OpenAI(
     api_key=openai.api_key,
-    timeout=httpx.Timeout(60.0, read=None),
+    timeout=httpx.Timeout(120.0, read=None),
 )
 
 # ──────────────────── グローバル ------------------------------------------------
@@ -121,7 +121,7 @@ def search_program(device: str, addr: int, context: int = 0) -> list[str]:
     return results
 
 
-def related_devices(device: str, addr: int, context: int = 10) -> list[str]:
+def related_devices(device: str, addr: int, context: int = 30) -> list[str]:
     """ターゲット近傍で使われている他デバイス一覧。"""
     deps: set[str] = set()
     pattern = re.compile(r"[XYMDTS]\d+")
@@ -180,7 +180,7 @@ def _run_diagnostics(
     @tool
     def program_lines(dev: str, address: int) -> str:
         """周辺プログラム行を返す。"""
-        return "\n".join(search_program(dev, address, context = 2))
+        return "\n".join(search_program(dev, address, context = 30))
 
     @tool
     def related(dev: str, address: int) -> str:
