@@ -1,217 +1,23 @@
 import eventlet
 eventlet.monkey_patch()
-from eventlet import tpool
 
 import os
-import csv
-import io
-import re
-import asyncio
-import httpx
-import openai
-from dotenv import load_dotenv
-from openai import OpenAI
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_login import LoginManager, UserMixin, login_user, \
     logout_user, login_required, current_user
-import requests
-from agents import Agent, Runner, function_tool as tool
-from agents.exceptions import MaxTurnsExceeded
 import hybrid_search as hs
-
-# ──────────────────── OpenAI 初期化 ────────────────────
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(
-    api_key=openai.api_key,
-    timeout=httpx.Timeout(60.0, read=None)
+from plc_utils import (
+    PROGRAMS,
+    decode_bytes,
+    load_program,
+    run_analysis,
 )
-
-PROGRAMS: dict[str, dict] = {}
-
-# ──────────────────── ユーティリティ群 ────────────────────
-def decode_bytes(data: bytes) -> io.StringIO:
-    """Decode uploaded bytes with several fallback encodings."""
-    for enc in ("utf-8-sig", "utf-16", "shift_jis", "cp932"):
-        try:
-            return io.StringIO(data.decode(enc))
-        except UnicodeDecodeError:
-            continue
-    return io.StringIO(data.decode("utf-8", errors="replace"))
-
-def load_program(stream: io.TextIOBase) -> dict:
-    """Load a PLC program CSV into a structured dictionary."""
-    sample = stream.read(1024)
-    stream.seek(0)
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
-    except csv.Error:
-        dialect = csv.excel_tab
-    reader = list(csv.reader(stream, dialect))
-    if not reader:
-        return {}
-    project = reader[0][0].strip().strip('"') if reader[0] else ""
-    model = ""
-    if len(reader) > 1 and len(reader[1]) > 1:
-        model = reader[1][1].strip().strip('"')
-    headers = reader[2] if len(reader) > 2 else []
-    rows = reader[3:] if len(reader) > 3 else []
-    return {"project": project, "model": model, "headers": headers, "rows": rows}
 
 class User(UserMixin):
     def __init__(self, username: str):
         self.id = username
 
-# ──────────────────── PLC 検索ヘルパ ────────────────────
-def search_program(device: str, addr: int, context: int = 0) -> list[str]:
-    """Return program lines referencing the given device with optional context."""
-    target = f"{device}{addr}"
-    results: list[str] = []
-    for prog in PROGRAMS.values():
-        headers = prog.get("headers", [])
-        rows = prog.get("rows", [])
-        if not rows or "I/O(デバイス)" not in headers:
-            continue
-        io_idx = headers.index("I/O(デバイス)")
-        step_idx = headers.index("ステップ番号") if "ステップ番号" in headers else None
-        inst_idx = headers.index("命令") if "命令" in headers else None
-        note_idx = headers.index("ノート") if "ノート" in headers else None
-        for i, row in enumerate(rows):
-            if len(row) <= io_idx:
-                continue
-            if row[io_idx].strip().strip('"') != target:
-                continue
-            start = max(0, i - context)
-            for j in range(start, i + 1):
-                ctx = rows[j]
-                if len(ctx) <= io_idx:
-                    continue
-                parts = []
-                if step_idx is not None and len(ctx) > step_idx and ctx[step_idx]:
-                    parts.append(f"ステップ{ctx[step_idx]}")
-                if inst_idx is not None and len(ctx) > inst_idx and ctx[inst_idx]:
-                    parts.append(ctx[inst_idx])
-                if len(ctx) > io_idx and ctx[io_idx]:
-                    parts.append(ctx[io_idx])
-                if note_idx is not None and len(ctx) > note_idx and ctx[note_idx]:
-                    parts.append(f"({ctx[note_idx]})")
-                if parts:
-                    line = " ".join(parts)
-                    if line not in results:
-                        results.append(line)
-    return results
-
-def related_devices(device: str, addr: int, context: int = 10) -> list[str]:
-    """Return devices appearing near the target in the program."""
-    pattern = re.compile(r"[XYMDTS]\d+")
-    lines = search_program(device, addr, context=context)
-    deps: set[str] = set()
-    for line in lines:
-        for m in pattern.findall(line):
-            if m != f"{device}{addr}":
-                deps.add(m)
-    return sorted(deps)
-
-def read_device_values(device: str, addr: int, length: int,
-                       *, base_url: str, ip: str, port: str) -> list[int]:
-    """Read device values via gateway."""
-    res = requests.get(
-        f"{base_url}/{device}/{addr}/{length}",
-        params={"ip": ip, "port": port},
-    )
-    res.raise_for_status()
-    return res.json()["values"]
-
-# ──────────────────── AI 診断メイン ────────────────────
-def _run_diagnostics(device: str, addr: int,
-                     *, base_url: str, ip: str, port: str) -> str:
-    """Run autonomous analysis using OpenAI agents."""
-
-    @tool
-    def read_values(dev: str, address: int, length: int) -> str:
-        """PLC デバイスの値を読み取ります。"""
-        length = length or 1  # モデルが 0/None を渡した場合の保険
-        vals = read_device_values(
-            dev, address, length,
-            base_url=base_url, ip=ip, port=port
-        )
-        return ",".join(str(v) for v in vals)
-
-    @tool
-    def program_lines(dev: str, address: int) -> str:
-        """デバイス周辺のプログラム行を返します。"""
-        return "\n".join(search_program(dev, address, context=2))
-
-    @tool
-    def related(dev: str, address: int) -> str:
-        """対象と一緒に使われているデバイス一覧。"""
-        return ",".join(related_devices(dev, address))
-
-    @tool
-    def comment(dev: str, address: int) -> str:
-        """デバイスにつけたコメントを返します。"""
-        return hs.get_comment(f"{dev}{address}") 
-
-    tools = [read_values, program_lines, related, comment]
-
-    agent = Agent(
-        name="PLC-Diagnostics",
-        instructions=(
-            "あなたは三菱シーケンサD/M/X/Yデバイスの不具合を調査するエージェントです。"
-            "得られた値やコメント、プログラムの命令から原因を推論し、"
-            "最後に『ANSWER: ....』形式で日本語要約を返答してください。"
-            "推論のなかで追加で調査するデバイスはコメントを取得してから調査してください。"
-        ),
-        model="o4-mini",
-        tools=tools,
-        output_type=str,
-    )
-
-    question = f"{device}{addr} の不具合原因を調査してください。"
-
-    def _run(a, q, turns: int):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return Runner.run_sync(a, input=q, max_turns=turns)
-        finally:
-            asyncio.set_event_loop(None)
-            loop.close()
-
-    try:
-        result = tpool.execute(_run, agent, question, 25)
-        return result.final_output
-    except MaxTurnsExceeded:
-        try:
-            # 1 回だけ 50 ターンで再試行
-            result = tpool.execute(_run, agent, question, 50)
-            return result.final_output
-        except Exception as ex:
-            return f"AI 呼び出しでエラーが発生しました: {ex}"
-    except Exception as ex:
-        return f"AI 呼び出しでエラーが発生しました: {ex}"
-
-# ──────────────────── 質問解析 ────────────────────
-def run_analysis(question: str, *, base_url: str, ip: str, port: str) -> str:
-    """Search comments for a device related to the question and diagnose."""
-
-    # コメント CSV が指定されていれば毎回読み込む
-    comment_path = os.getenv("COMMENT_CSV")
-    if comment_path and os.path.exists(comment_path):
-        with open(comment_path, "rb") as f:
-            hs.load_comments(decode_bytes(f.read()))
-
-    if not hs.COMMENTS:
-        return "コメントがロードされていません"
-
-    dev, score = hs.find_best_device(question)
-    if dev is None:
-        return "デバイスを特定できませんでした"
-    device, addr = re.match(r"([A-Za-z]+)(\d+)", dev).groups()
-    device = device.upper()
-    addr = int(addr)
-    return _run_diagnostics(device, addr, base_url=base_url, ip=ip, port=port)
 
 # ──────────────────── Flask アプリ生成 ────────────────────
 def create_app():
