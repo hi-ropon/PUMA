@@ -135,15 +135,15 @@
     });
 
     // 手動アップロードボタン
-    document.getElementById("upload").onclick = () =>
-    {
-      uploadComments();
-    };
+    const uploadBtn = document.getElementById("upload");
+    if (uploadBtn) {
+      uploadBtn.onclick = () => uploadComments();
+    }
 
-    document.getElementById("prog-upload").onclick = () =>
-    {
-      uploadPrograms();
-    };
+    const progUploadBtn = document.getElementById("prog-upload");
+    if (progUploadBtn) {
+      progUploadBtn.onclick = () => uploadPrograms();
+    }
 
     // AIからの返信受信
     socket.on("reply", (data) =>
