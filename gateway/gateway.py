@@ -1,5 +1,8 @@
 # .\venv\Scripts\Activate.ps1
 # uvicorn gateway:app --host 127.0.0.1 --port 8001
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent / "libs"))
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
