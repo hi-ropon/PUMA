@@ -36,84 +36,77 @@
       z-index: -1;
     }
 
-    /* ------------- レイアウト（変更なし） ------------- */
+    /* ------------- レイアウト ------------- */
     .sidebar   { width:260px;padding:1.5rem;display:flex;flex-direction:column;gap:2rem;
-                 backdrop-filter:blur(16px);background:var(--glass);border-right:1px solid var(--glass-border);}
+                 backdrop-filter:blur(16px);background:var(--glass);border-right:1px solid var(--glass-border);}   
     .main      { flex:1;display:flex;flex-direction:column;backdrop-filter:blur(16px);
-                 background:var(--glass);border-left:1px solid var(--glass-border);}
+                 background:var(--glass);border-left:1px solid var(--glass-border);}   
 
     .btn-new   {display:flex;align-items:center;gap:0.6rem;padding:0.8rem 1rem;border-radius:0.9rem;
                 border:1px solid var(--glass-border);background:rgba(255,255,255,0.06);color:var(--txt-main);
                 cursor:pointer;transition:background 0.15s ease;}
-    .btn-new:hover{background:rgba(255,255,255,0.1);}
-    .btn-new .plus{width:1.1rem;height:1.1rem;display:grid;place-items:center;font-weight:700;color:var(--accent);}
-    .chat-list{flex:1;overflow-y:auto;font-size:0.9rem;color:var(--txt-sub);}
-    .chat-item{padding:0.6rem 0.2rem;cursor:pointer;border-radius:0.5rem;transition:background 0.15s ease;}
-    .chat-item:hover{background:rgba(255,255,255,0.08);}
+    .btn-new:hover{background:rgba(255,255,255,0.1);}   
+    .btn-new .plus{width:1.1rem;height:1.1rem;display:grid;place-items:center;font-weight:700;color:var(--accent);}   
 
-    .file-panel{display:flex;flex-direction:column;gap:0.8rem;}
+    .chat-list{flex:1;overflow-y:auto;font-size:0.9rem;color:var(--txt-sub);}   
+    .chat-item{padding:0.6rem 0.2rem;cursor:pointer;border-radius:0.5rem;transition:background 0.15s ease;}   
+    .chat-item:hover{background:rgba(255,255,255,0.08);}   
+
+    .file-panel{display:flex;flex-direction:column;gap:0.8rem;}   
     .file-btn{display:flex;align-items:center;gap:0.6rem;font-size:0.85rem;color:var(--txt-sub);cursor:pointer;
-              transition:color 0.15s ease;}
-    .file-btn:hover{color:var(--txt-main);}
-    .file-btn input{display:none;}
-    .file-btn::before{content:"📄";font-size:0.9rem;}
+              transition:color 0.15s ease;}   
+    .file-btn:hover{color:var(--txt-main);}   
+    .file-btn input{display:none;}   
+    .file-btn::before{content:"📄";font-size:0.9rem;}   
 
     .header{padding:1.3rem 2rem;font-size:1.35rem;font-weight:600;border-bottom:1px solid var(--glass-border);
-            display:flex;justify-content:space-between;align-items:center;}
+            display:flex;justify-content:space-between;align-items:center;}   
 
-    .logout-btn{width:2.6rem;height:2.6rem;border-radius:0.75rem;border:1px solid var(--glass-border);
-                background:rgba(255,255,255,0.06);display:grid;place-items:center;font-size:1.1rem;color:var(--txt-sub);
-                cursor:pointer;transition:background 0.15s ease,color 0.15s ease;}
-    .logout-btn:hover{background:rgba(255,255,255,0.1);color:var(--txt-main);}
+    .header-buttons{display:flex;gap:0.8rem;}   
+
+    .logout-btn, .debug-btn{
+      width:2.6rem;height:2.6rem;border-radius:0.75rem;border:1px solid var(--glass-border);
+      background:rgba(255,255,255,0.06);display:grid;place-items:center;font-size:1.1rem;color:var(--txt-sub);
+      cursor:pointer;transition:background 0.15s ease,color 0.15s ease;}
+    .logout-btn:hover, .debug-btn:hover{background:rgba(255,255,255,0.1);color:var(--txt-main);}   
 
     /* ------------- チャットバブル ------------- */
-    .log{flex:1;padding:2rem;overflow-y:auto;display:flex;flex-direction:column;gap:1rem;}
+    .log{flex:1;padding:2rem;overflow-y:auto;display:flex;flex-direction:column;gap:1rem;}   
 
-    .msg
-    {
-      max-width:540px;padding:0.6rem 0.9rem;border-radius:0.9rem;
-      backdrop-filter:blur(12px);background:rgba(255,255,255,0.07);border:1px solid var(--glass-border);
-      display:flex;gap:0.7rem;
-      align-items:flex-start;
-    }
+    .msg{max-width:540px;padding:0.6rem 0.9rem;border-radius:0.9rem;
+         backdrop-filter:blur(12px);background:rgba(255,255,255,0.07);border:1px solid var(--glass-border);
+         display:flex;gap:0.7rem;align-items:flex-start;}   
 
-    .msg.user   {align-self:flex-start;}
-    .msg.ai     {align-self:flex-start;}
-    .msg.system {align-self:flex-start;opacity:0.8;}
+    .msg.user   {align-self:flex-start;}   
+    .msg.ai     {align-self:flex-start;}   
+    .msg.system {align-self:flex-start;opacity:0.8;}   
 
-    .avatar
-    {
-      flex-shrink:0;width:1.8rem;height:1.8rem;border-radius:50%;
-      display:grid;place-items:center;font-size:0.75rem;font-weight:600;
-    }
+    .avatar{flex-shrink:0;width:1.8rem;height:1.8rem;border-radius:50%;display:grid;place-items:center;font-size:0.75rem;font-weight:600;}
     .msg.user   .avatar{background:var(--txt-sub);color:#000;}
     .msg.ai     .avatar{background:var(--accent);color:#000;}
-    .msg.system .avatar{background:var(--glass-border);color:#000;}
+    .msg.system .avatar{background:var(--glass-border);color:#000;}   
 
-    .text
-    {
-      white-space:pre-wrap;font-size:0.9rem;line-height:1.45;
-      margin-top:0.2rem;
-    }
+    .text{white-space:pre-wrap;font-size:0.9rem;line-height:1.45;margin-top:0.2rem;}   
 
     /* ------------- 入力 ------------- */
-    .composer{display:flex;gap:1rem;padding:1.3rem 2rem;border-top:1px solid var(--glass-border);}
+    .composer{display:flex;gap:1rem;padding:1.3rem 2rem;border-top:1px solid var(--glass-border);}   
     .composer input{flex:1;padding:0.85rem 1rem;border-radius:0.85rem;border:1px solid var(--glass-border);
-                    background:rgba(255,255,255,0.06);color:var(--txt-main);outline:none;font-size:0.9rem;}
+                    background:rgba(255,255,255,0.06);color:var(--txt-main);outline:none;font-size:0.9rem;}   
     .composer button{width:3rem;border:none;border-radius:0.85rem;background:var(--accent);color:#000;font-size:1.25rem;
-                     font-weight:700;cursor:pointer;transition:transform 0.15s ease;}
-    .composer button:hover{transform:translateY(-2px);}
-    .composer button:active{transform:translateY(0);}
+                     font-weight:700;cursor:pointer;transition:transform 0.15s ease;}   
+    .composer button:hover{transform:translateY(-2px);}   
+    .composer button:active{transform:translateY(0);}   
 
-    ::-webkit-scrollbar{width:8px;}
-    ::-webkit-scrollbar-thumb{background:var(--glass-border);border-radius:4px;}
-    ::-webkit-scrollbar-track{background:transparent;}
+    ::-webkit-scrollbar{width:8px;}   
+    ::-webkit-scrollbar-thumb{background:var(--glass-border);border-radius:4px;}   
+    ::-webkit-scrollbar-track{background:transparent;}   
 
     @media(max-width:720px){.sidebar{display:none;}}
   </style>
 </head>
 
 <body>
+  <!-- ===== サイドバー ===== -->
   <aside class="sidebar">
     <button class="btn-new"><span class="plus">＋</span><span>New Chat</span></button>
     <div class="chat-list" id="chat-list"><div class="chat-item">Chat 1</div></div>
@@ -123,10 +116,14 @@
     </div>
   </aside>
 
+  <!-- ===== メイン ===== -->
   <main class="main">
     <div class="header">
       <span>MXia</span>
-      <button id="logout-btn" class="logout-btn" title="Logout">⇦</button>
+      <div class="header-buttons">
+        <button id="fileinfo-btn" class="debug-btn" title="File Info">ℹ</button>
+        <button id="logout-btn" class="logout-btn" title="Logout">⇦</button>
+      </div>
     </div>
 
     <div class="log" id="log"></div>
@@ -137,6 +134,7 @@
     </div>
   </main>
 
+  <!-- ===== ロジック ===== -->
   <script>
     const $ = id => document.getElementById(id);
 
@@ -177,21 +175,42 @@
       const f=$("csv").files[0]; if(!f){addMessage("コメント CSV を選択してください","system");return;}
       const fd=new FormData(); fd.append("file",f);
       try{const r=await fetch("/api/comments",{method:"POST",body:fd});
-           const j=await r.json(); addMessage(`コメントを読み込みました (${j.count} 件)`,"system");}
-      catch(e){addMessage(`コメント読み込みエラー: ${e}`,"system");}
+           const j=await r.json(); addMessage(`コメントを読み込みました (${j.count} 件)`,`system`);}catch(e){addMessage(`コメント読み込みエラー: ${e}`,"system");}
     });
 
     $("prog-files").addEventListener("change", async ()=>{
       const fs=$("prog-files").files; if(fs.length===0){addMessage("PLC プログラム CSV を選択してください","system");return;}
       const fd=new FormData(); [...fs].forEach(f=>fd.append("files[]",f));
       try{const r=await fetch("/api/programs",{method:"POST",body:fd});
-           const j=await r.json(); addMessage(`${j.count} 個のプログラムを読み込みました`,"system");}
-      catch(e){addMessage(`プログラム読み込みエラー: ${e}`,"system");}
+           const j=await r.json(); addMessage(`${j.count} 個のプログラムを読み込みました`,`system`);}catch(e){addMessage(`プログラム読み込みエラー: ${e}`,"system");}
     });
 
     $("logout-btn").onclick = async ()=>{
       await fetch("/logout",{method:"POST"});
       location.href="/login.html";
+    };
+
+    // ---------- デバッグ: ファイル情報 ----------
+    $("fileinfo-btn").onclick = async () =>
+    {
+      try
+      {
+        const res = await fetch("/api/fileinfo");
+        const j   = await res.json();
+        if(res.ok)
+        {
+          const txt = (j.files || []).map(f=>`${f.name}.${f.ext}  ${f.size} bytes`).join("\n");
+          addMessage(txt || "ファイル情報がありません","system");
+        }
+        else
+        {
+          addMessage(`ファイル情報取得エラー: ${j.error || res.statusText}`,"system");
+        }
+      }
+      catch(err)
+      {
+        addMessage(`ファイル情報取得エラー: ${err}`,"system");
+      }
     };
   </script>
 </body>
