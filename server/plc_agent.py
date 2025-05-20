@@ -22,7 +22,7 @@ from agents.exceptions import MaxTurnsExceeded
 # 分離したヘルパ
 from file_io import decode_bytes, load_program
 from program_search import search_program, related_devices
-from gateway_client import read_device_values
+from gateway_client import read_device_values, read_file_info
 import comments_search as hs
 import device_reasoner as dr  # reasoning_device を提供
 
@@ -148,4 +148,26 @@ def run_analysis(
         ip=ip,
         port=port,
         question=question,
+    )
+
+# ──────────────────── ファイル情報ラッパ ────────────────────
+def read_directory_fileinfo(
+    *,
+    drive_no: int = 0,
+    start_file_no: int = 1,
+    request_count: int = 36,
+    base_url: str = "http://127.0.0.1:8001/api/fileinfo",
+    ip: str = "127.0.0.1",
+    port: str = "5511",
+):
+    """
+    Gateway 経由で 1810 (ディレクトリ/ファイル情報読出し) を呼び出す
+    """
+    return read_file_info(
+        drive=drive_no,
+        start_no=start_file_no,
+        count=request_count,
+        base_url=base_url,
+        ip=ip,
+        port=port,
     )
