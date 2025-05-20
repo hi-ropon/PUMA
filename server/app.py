@@ -20,6 +20,7 @@ import comments_search as hs
 # ──────────────────── 設定 ────────────────────
 load_dotenv()
 UPLOAD_LIMIT_MB: int = int(os.getenv("MAX_UPLOAD_MB", "25"))
+PLC_DRIVE = int(os.getenv("PLC_DRIVE", "4"))
 
 # ──────────────────── Flask 初期化 ────────────────────
 def create_app():
@@ -133,6 +134,18 @@ def create_app():
     @login_required
     def list_programs():
         return jsonify({"programs": list(plc.PROGRAMS.keys())})
+    
+    @app.get("/api/fileinfo")
+    @login_required
+    def file_info():
+        drive = int(request.args.get("drive", PLC_DRIVE))
+        infos = plc.read_directory_fileinfo(
+            drive_no=drive,
+            base_url=os.getenv("GATEWAY_FILEINFO_URL", "http://127.0.0.1:8001/api/fileinfo"),
+            ip=os.getenv("PLC_IP",   "127.0.0.1"),
+            port=os.getenv("PLC_PORT", "5511"),
+        )
+        return jsonify({"files": infos})
 
     # SPA 配信 --------------------------------------------------------------
     @app.route("/", defaults={"path": ""})
