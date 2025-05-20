@@ -10,34 +10,54 @@ class MCProtocolError(Exception):
         devicename(str):    devicename. (ex: "Q", "P", both of them does not support mcprotocol.)
 
     """
-    def __init__(self, errorcode):
-        self.errorcode =  "0x" + format(errorcode, "x").rjust(4, "0").upper()
+    def __init__(self, code: int):
+        self.code = f"0x{code:04X}"
 
-    def __str__(self):
-        return "mc protocol error: error code {}".format(self.errorcode)
+    def __str__(self) -> str:
+        return f"MC-Protocol error (end-code {self.code})"
 
-class UnsupportedComandError(Exception):
+class UnsupportedComandError(MCProtocolError):
     """This command is not supported by the module you connected.  
 
     """
     def __init__(self):
-        pass
+        super().__init__(0xC059)
 
     def __str__(self):
-        return "This command is not supported by the module you connected." \
-               "If you connect with CPU module, please use E71 module."
-
+        return ("The connected module does not support this command. "
+                "If you are using a CPU unit, please insert an E71 Ethernet module.")
     
-def check_mcprotocol_error(status):
-    """Check mc protocol command error.
-    If errot exist(status != 0), raise Error.
+# ──────────── 1810 系ファイル制御エラー ────────────
+class FileControlError(MCProtocolError): ...
 
-    """
+class FileNotFoundError(FileControlError):
+    def __init__(self): super().__init__(0xC051)
+    def __str__(self): return "File or directory not found on PLC."
+
+class DriveNotFoundError(FileControlError):
+    def __init__(self): super().__init__(0xC052)
+    def __str__(self): return "Specified drive number does not exist."
+
+class AccessDeniedError(FileControlError):
+    def __init__(self): super().__init__(0xC053)
+    def __str__(self): return "Access to the file or drive is denied."
+
+# end-code → 例外マップ
+_error_map = {
+    0x0000: None,
+    0xC051: FileNotFoundError,
+    0xC052: DriveNotFoundError,
+    0xC053: AccessDeniedError,
+    0xC059: UnsupportedComandError,
+}
+    
+def check_mcprotocol_error(status: int):
+    """非 0 の end-code を受け取ったら適切な例外を送出"""
+    exc = _error_map.get(status)
     if status == 0:
-        return None
-    elif status == 0xC059:
-        raise UnsupportedComandError
-    else:
+        return
+    if exc is None:
         raise MCProtocolError(status)
+    raise exc()
 
         

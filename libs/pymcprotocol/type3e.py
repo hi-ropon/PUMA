@@ -1005,3 +1005,71 @@ class Type3E:
         answer_len = self._decode_value(recv_data[data_index:data_index+self._wordsize], mode="short") 
         answer = recv_data[data_index+self._wordsize:].decode()
         return answer_len, answer
+    
+    def read_directory_fileinfo(
+            self,
+            *,
+            drive_no: int,
+            start_file_no: int = 1,
+            request_count: int = 36,
+            directory: int = 0,
+            iqr: bool = False,
+            path: str | None = None   # ★追加
+    ):
+        command = const.CMD_DIR_FILE_INFO_READ
+        subcommand = (const.SUBCMD_DIR_FILE_INFO_READ_IQR
+                    if iqr else const.SUBCMD_DIR_FILE_INFO_READ_QL)
+
+        # ---------- パラメータ作成 ----------
+        if iqr:
+            # ── (1) 4byte パスワード ──
+            param  = self._encode_value(0, "long")          # ←固定値 0
+            # ── (2) Drive, Head-FileNo, Request-Cnt ──
+            param += self._encode_value(drive_no, "short")
+            param += self._encode_value(start_file_no, "long") 
+            param += self._encode_value(request_count, "short")
+
+            # ── (3) パス長＋パス ──
+            if path:
+                p = path.encode("utf-16le") + b"\x00\x00"
+                param += self._encode_value(len(p)//2, "short")
+                param += p
+            else:
+                param += self._encode_value(1, "short")      # 長さ=1 (NUL)
+                param += b"\x00\x00"
+
+
+        # ---------- 送信 ----------
+        request = self._make_commanddata(command, subcommand) + param
+        self._send(self._make_senddata(request))
+        answer = self._recv()
+
+        # ステータス確認
+        status_idx = self._get_answerstatus_index()
+        status     = int.from_bytes(answer[status_idx:status_idx + 2], "little")
+        mcprotocolerror.check_mcprotocol_error(status)
+
+        # データ解析
+        idx              = self._get_answerdata_index()
+        file_info_count  = int.from_bytes(answer[idx:idx + 2], "little")
+        idx             += 2
+
+        if iqr:
+            # iQ-R は可変長 UTF-16。上位層で解析してください
+            return file_info_count, [{"raw": answer[idx:]}]
+
+        # Q/L 系列は 1 エントリ 32 byte 固定
+        ENTRY = const.FILEINFO_ENTRY_BYTES_QL
+        entries = []
+        for _ in range(file_info_count):
+            chunk = answer[idx:idx + ENTRY]
+            name  = chunk[0:8].decode("ascii", "ignore").rstrip()
+            ext   = chunk[8:11].decode("ascii", "ignore").rstrip()
+            attr  = chunk[11]
+            size  = int.from_bytes(chunk[-4:], "little")
+            entries.append(
+                {"name": name, "ext": ext, "attribute": attr,
+                    "size": size, "raw": chunk})
+            idx += ENTRY
+
+        return file_info_count, entries

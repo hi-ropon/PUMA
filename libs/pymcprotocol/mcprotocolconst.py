@@ -11,6 +11,19 @@ iQR_SERIES  = "iQ-R"
 COMMTYPE_BINARY = "binary"
 COMMTYPE_ASCII  = "ascii"
 
+# ---------------------------------------------------------------------------
+# 12.4  ファイルの確認  ─ ディレクトリ／ファイル情報の読出し
+#   コマンド 0x1810   サブコマンド
+#       0x0000 … MELSEC-Q/L 系列
+#       0x0040 … MELSEC iQ-R 系列 :contentReference[oaicite:1]{index=1}
+# ---------------------------------------------------------------------------
+CMD_DIR_FILE_INFO_READ            = 0x1810
+SUBCMD_DIR_FILE_INFO_READ_QL      = 0x0000
+SUBCMD_DIR_FILE_INFO_READ_IQR     = 0x0040
+
+# データサイズ（Q/L 固定長）— 公式マニュアル図より 32 byte 固定 :contentReference[oaicite:3]{index=3}
+FILEINFO_ENTRY_BYTES_QL = 32
+
 class DeviceCodeError(Exception):
     """devicecode error. Device is not exsist.
 

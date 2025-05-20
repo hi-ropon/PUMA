@@ -6,3 +6,21 @@ __url__          = 'https://github.com/senrust/pymcprotocol'
 
 from .type3e import Type3E
 from .type4e import Type4E
+
+from .mcprotocolerror import (
+    MCProtocolError,
+    FileNotFoundError,
+    DriveNotFoundError,
+    AccessDeniedError,
+    UnsupportedComandError,
+    check_mcprotocol_error,
+)
+
+__all__ = [
+    "MCProtocolError",
+    "FileNotFoundError",
+    "DriveNotFoundError",
+    "AccessDeniedError",
+    "UnsupportedComandError",
+    "check_mcprotocol_error",
+]
