@@ -1,4 +1,3 @@
 fastapi
 uvicorn[standard]
-pymcprotocol>=0.3.0
 python-dotenv
