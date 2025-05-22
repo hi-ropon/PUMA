@@ -1,4 +1,5 @@
 """
+app.py
 Flask + SocketIO サーバー (複数 PLC プログラム CSV 対応版)
 """
 # ──────────────────── インポート ────────────────────
@@ -13,6 +14,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_login import (LoginManager, UserMixin, login_user,
                          logout_user, login_required, current_user)
 from flask_socketio import SocketIO, emit
+from flask_cors import CORS
 
 import plc_agent as plc
 import comments_search as hs
@@ -28,6 +30,8 @@ def create_app():
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "change-me")
     # アップロード総量制限
     app.config["MAX_CONTENT_LENGTH"] = UPLOAD_LIMIT_MB * 1024 * 1024
+
+    CORS(app, supports_credentials=True)
 
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
@@ -139,13 +143,46 @@ def create_app():
     @login_required
     def file_info():
         drive = int(request.args.get("drive", PLC_DRIVE))
+        raw   = (request.args.get("path") or "").strip()
+
+        raw = raw.replace("/", "\\")
+
+        if not raw:
+            path = "$MELPRJ$"
+        elif raw.startswith("\\"):
+            path = f"$MELPRJ${raw}"
+        else:
+            path = raw
+
         infos = plc.read_directory_fileinfo(
-            drive_no=drive,
-            base_url=os.getenv("GATEWAY_FILEINFO_URL", "http://127.0.0.1:8001/api/fileinfo"),
-            ip=os.getenv("PLC_IP",   "127.0.0.1"),
-            port=os.getenv("PLC_PORT", "5511"),
+            drive_no = drive,
+            path     = path,
+            base_url = os.getenv("GATEWAY_FILEINFO_URL",
+                                "http://127.0.0.1:8001/api/fileinfo"),
+            ip   = os.getenv("PLC_IP",   "127.0.0.1"),
+            port = os.getenv("PLC_PORT", "5511"),
         )
         return jsonify({"files": infos})
+
+    @app.post("/api/diagnose")
+    @login_required
+    def diagnose():
+        """
+        POST  { "text": "質問…" } を受け取り
+        JSON  { "answer": "..." } を返す
+        """
+        data = request.get_json(silent=True) or {}
+        q = (data.get("text") or "").strip()
+        if not q:
+            return jsonify({"error": "質問が空です"}), 400
+
+        answer = plc.run_analysis(
+            q,
+            base_url=os.getenv("GATEWAY_URL", "http://127.0.0.1:8001/api/read"),
+            ip      =os.getenv("PLC_IP",      "127.0.0.1"),
+            port    =os.getenv("PLC_PORT",    "5511"),
+        )
+        return jsonify({"answer": answer})
 
     # SPA 配信 --------------------------------------------------------------
     @app.route("/", defaults={"path": ""})
@@ -159,7 +196,6 @@ def create_app():
         return send_from_directory(app.static_folder, html)
 
     return app, socketio
-
 
 # ──────────────────── main ────────────────────
 if __name__ == "__main__":

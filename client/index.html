@@ -157,19 +157,70 @@
       $("log").scrollTop = $("log").scrollHeight;
     }
 
+    // ========== 変更後のファイル一覧描画（最小例） ==========
+    async function showFileList(path="") {
+      const qs  = path ? `?path=${encodeURIComponent(path)}` : "";
+      const res = await fetch(`/api/fileinfo${qs}`, { credentials:"same-origin" });
+      const j   = await res.json();
+      if(!res.ok) { addMessage(`エラー: ${j.error||res.statusText}`,"system"); return }
+
+      // 描画
+      const lines = (j.files||[])
+      .filter(f => f.name !== ".")
+      .map(f=>{
+        const isDir = (f.attribute & 0x10) !== 0;
+        return `<div class="fitem"
+                    data-fname="${f.name}${f.ext?'.'+f.ext:''}"
+                    data-base="${path}"
+                    data-isdir="${isDir}">
+                  ${isDir?"📂":"📄"} ${f.name}${f.ext? ("."+f.ext):""}
+                  (${f.size} bytes)
+                </div>`;
+      }).join("");
+      addMessage(lines || "空です","system");
+
+      // ---------- クリックで再読込 ----------
+      document.querySelectorAll(".fitem").forEach(el=>{
+        if(el.dataset.isdir==="true"){
+          el.onclick = ()=>{
+            const cur  = el.dataset.base || "";
+            // 区切りは「\」
+            const next = cur ? `${cur}\\${el.dataset.fname}` : `\\${el.dataset.fname}`;
+            showFileList(next);
+          };
+        }
+      });
+
+    }
+
     const socket = io({ withCredentials:true });
     socket.on("reply", d => addMessage(d.text,"ai"));
 
-    $("send").onclick = () => {
+    $("send").onclick = async () => {
       const t = $("query").value.trim();
-      if(!t) return;
-      socket.emit("chat",{text:t});
-      addMessage(t,"user");
+      if (!t) return;
+
+      // 送信内容をまず自分側に表示
+      addMessage(t, "user");
       $("query").value = "";
+
+      try {
+        const res = await fetch("/api/diagnose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: t }),
+          credentials: "same-origin"
+        });
+        const j = await res.json();
+        if (res.ok) {
+          addMessage(j.answer ?? "(空の応答)", "ai");
+        } else {
+          addMessage(`エラー: ${j.error || res.statusText}`, "system");
+        }
+      } catch (err) {
+        addMessage(`通信エラー: ${err}`, "system");
+      }
     };
-    $("query").addEventListener("keydown",e=>{
-      if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();$("send").click();}
-    });
 
     $("csv").addEventListener("change", async ()=>{
       const f=$("csv").files[0]; if(!f){addMessage("コメント CSV を選択してください","system");return;}
@@ -191,27 +242,7 @@
     };
 
     // ---------- デバッグ: ファイル情報 ----------
-    $("fileinfo-btn").onclick = async () =>
-    {
-      try
-      {
-        const res = await fetch("/api/fileinfo");
-        const j   = await res.json();
-        if(res.ok)
-        {
-          const txt = (j.files || []).map(f=>`${f.name}.${f.ext}  ${f.size} bytes`).join("\n");
-          addMessage(txt || "ファイル情報がありません","system");
-        }
-        else
-        {
-          addMessage(`ファイル情報取得エラー: ${j.error || res.statusText}`,"system");
-        }
-      }
-      catch(err)
-      {
-        addMessage(`ファイル情報取得エラー: ${err}`,"system");
-      }
-    };
+    $("fileinfo-btn").onclick = ()=> showFileList("");
   </script>
 </body>
 </html>

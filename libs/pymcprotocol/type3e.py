@@ -1,3 +1,5 @@
+# type3e.py
+
 """This file implements mcprotocol 3E type communication.
 """
 
@@ -1014,7 +1016,7 @@ class Type3E:
             request_count: int = 36,
             directory: int = 0,
             iqr: bool = False,
-            path: str | None = None   # ★追加
+            path: str | None = None
     ):
         command = const.CMD_DIR_FILE_INFO_READ
         subcommand = (const.SUBCMD_DIR_FILE_INFO_READ_IQR
