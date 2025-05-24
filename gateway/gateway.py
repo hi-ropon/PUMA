@@ -78,86 +78,93 @@ class FileInfoRequest(BaseModel):
     ip: Optional[str] = None
     port: Optional[int] = None
 
-def _clean_filename(utf16: str) -> str:
-    # ---- 直接 Unicode 文字列を検索 ----
-    m = re.findall(r'[\$A-Za-z0-9_\-]{1,64}\.[A-Za-z0-9]{1,4}', utf16)
-    if m:
-        return m[-1]                       # 拡張子あり
+def _clean_filename(s: str) -> str:
+    s = s.replace('\x00', '').strip()            # NUL, 前後スペース除去
+    m = re.findall(r'[\$A-Za-z0-9_\-]{1,64}\.[A-Za-z0-9]{1,4}', s)
+    if m:  return m[-1]
+    m = re.findall(r'[\$A-Za-z0-9_\-]{1,64}', s)
+    return m[-1] if m else s
 
-    m = re.findall(r'[\$A-Za-z0-9_\-]{1,64}', utf16)
-    return m[-1] if m else utf16.strip('\x00')
+import re
+
+ASCII_NAME = re.compile(r'[\$A-Za-z0-9_\-]{1,64}(?:\.[A-Za-z0-9]{1,4})?')
 
 def parse_iqr_fileinfo(raw: bytes) -> list[dict]:
-    """
-    MELSEC iQ-R 1810h/0040h Directory / File-Info 解析（確定版）
-    戻り値例:
-      [{'name':'SY_SYSTEM','ext':'PRM','size':1048612,'attribute':0x24}, …]
-    """
-    files: list[dict] = []
-    idx = 4                                      # 先頭 4B = Last-File-No + Reserved
+    files = []
+    # ヘッダ (LastFileNo + Reserved) 4 byte をスキップ
+    idx = 4
 
     while idx + 4 <= len(raw):
+        # 1) ファイル番号（2 byte, リトル）
         file_no = int.from_bytes(raw[idx:idx+2], 'little')
-        if file_no == 0xFFFF:                    # 終端
+        if file_no == 0xFFFF:
             break
         idx += 2
 
+        # 2) 可変長部のバイト数（2 byte, リトル）
         var_len = int.from_bytes(raw[idx:idx+2], 'little')
         idx += 2
 
-        # ───────── 固定 18 バイト ──────────
-        attr  = int.from_bytes(raw[idx:idx+2], 'little'); idx += 2
-        idx  += 2             # 予約
-        idx  += 4 + 4         # 更新時刻 + 更新日付
-        idx  += 2             # 予約
-        size  = int.from_bytes(raw[idx:idx+4], 'little'); idx += 4
+        # 3) 固定部 (属性＋予約＋更新時刻＋更新日付＋予約＋サイズ) の読み飛ばしと取得
+        attr = int.from_bytes(raw[idx:idx+2], 'little')
+        idx += 2
+        idx += 2 + 4 + 4 + 2  # 予約 + 日時 + 予約
+        size = int.from_bytes(raw[idx:idx+4], 'little')
+        idx += 4
 
-        # ───────── 可変長部（後ろから読む）───
-        var_end   = idx + var_len
-        # 1) FileNameLen
-        fname_len = int.from_bytes(raw[var_end-2:var_end], 'big')
-        # 2) FileName
-        fname_beg = var_end - 2 - fname_len*2
-        fname     = raw[fname_beg:fname_beg + fname_len*2].decode('utf-16le','ignore')
-        # 3) LinkInfoLen（FileName の直前）
-        link_len  = int.from_bytes(raw[fname_beg-2:fname_beg], 'big')
-        # LinkInfo は使わないが，位置を合わせるため読み飛ばす
-        idx = var_end - 2 - fname_len*2 - 2 - link_len
+        # 4) 可変部本体をスライス
+        var_start = idx
+        var_end   = var_start + var_len
+        var_bytes = raw[var_start:var_end]
 
-        # ───────── 整形 ──────────
-        #   余計なパス／制御文字を除去して「最後の ASCII 名」を拾う
-        clean = _clean_filename(fname)
+        # 5) 末尾からファイル名長 (2 byte, ビッグ) を読み取って、UTF-16LE 名を逆引き
+        name = ""
+        if len(var_bytes) >= 2:
+            name_len = int.from_bytes(var_bytes[-2:], 'big')
+            start = len(var_bytes) - 2 - name_len*2
+            if start >= 0:
+                name = var_bytes[start:start + name_len*2].decode('utf-16le', 'ignore')
+
+        # 6) 最後の ASCII 部分だけクリーンアップ
+        m = ASCII_NAME.findall(name)
+        clean = m[-1] if m else name.strip('\x00') or "."
 
         base, _, ext = clean.partition('.')
         files.append({
-            "name": base or ".",                # "." / ".." もそのまま返す
-            "ext":  ext,
-            "size": size,
-            "attribute": attr & 0xFF,           # 0x10 → ディレクトリ
+            "name":      base,
+            "ext":       ext,
+            "size":      size,
+            "attribute": attr & 0xFF,  # 0x10 → ディレクトリ
         })
 
-        # 次のエントリへ
+        # 7) 次レコードへ
         idx = var_end
 
     return files
 
 @app.get("/api/fileinfo/{drive}")
 def api_fileinfo_get(
-        drive: int,
-        start_no: int = 1,
-        count: int = 36,
-        path: str | None = "$MELPRJ$",
-        ip: Optional[str] = None,
-        port: Optional[int] = None):
+    drive: int,
+    start_no: int = 1,
+    count: int    = 36,
+    path: str | None = "$MELPRJ$",
+    ip: Optional[str] = None,
+    port: Optional[int] = None
+):
     try:
-        return _file_info(drive, start_no, count,
-                        path=path,
-                        ip=ip or PLC_IP, port=port or PLC_PORT)
+        return _file_info(
+            drive, start_no, count,
+            path   = path,
+            ip     = ip   or PLC_IP,
+            port   = port or PLC_PORT
+        )
     except MCProtocolError as ex:
         raise HTTPException(status_code=400, detail=str(ex))
 
-def _file_info(drive: int, start_no: int, count: int, *,
-               path: str = "$MELPRJ$", ip: str, port: int):
+def _file_info(
+    drive: int, start_no: int, count: int,
+    *, path: str, ip: str, port: int
+):
     plc = Type3E(plctype="iQ-R")
     plc.setaccessopt(commtype="binary")
     plc.timer = int(TIMEOUT * 4)
@@ -171,9 +178,11 @@ def _file_info(drive: int, start_no: int, count: int, *,
             path          = path
         )
         raw = infos[0]["raw"]
-        print("1810h raw hex:\n%s", binascii.hexlify(raw).decode())
-        
-        infos = parse_iqr_fileinfo(infos[0]["raw"])
-        return {"files": infos}
+        print(f"info: {infos[0]}")
+        print(f"info raw:{infos[0]['raw']}")
+        # デバッグ用に生データを出力
+        print(f"1810h raw hex:\n{binascii.hexlify(raw).decode()}")
+        files = parse_iqr_fileinfo(raw)
+        return {"files": files}
     finally:
         plc.close()
