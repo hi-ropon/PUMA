@@ -11,7 +11,9 @@ class MCProtocolError(Exception):
 
     """
     def __init__(self, code: int):
+        self.status     = code
         self.code = f"0x{code:04X}"
+        super().__init__(f"mc protocol error: error code {self.code}")
 
     def __str__(self) -> str:
         return f"MC-Protocol error (end-code {self.code})"

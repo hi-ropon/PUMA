@@ -106,32 +106,84 @@ def api_fileinfo(
 # ─────────────────── 1811 ファイル検索 ───────────────────
 @app.get("/api/filesearch/{drive}")
 def api_filesearch(
-    drive: int,
+    drive:    int,
     filename: str,
-    path: str | None = "$MELPRJ$",
-    ip: str | None = None,
-    port: int | None = None,
+    path:     str | None = "",            # "",  PROG_FILES,  $TMP$ など
+    ip:       str | None = None,
+    port:     int | None = None,
+    debug:    bool = False
 ):
     plc = Type3E(plctype="iQ-R")
     plc.setaccessopt(commtype="binary")
     plc.timer = int(TIMEOUT_SEC * 4)
     plc.connect(ip or PLC_IP, port or PLC_PORT)
 
+    if debug:
+        plc._set_debug(True)
+
+    # ---------- 1811 用 / 1810 用パス生成 ----------
+    if not path:                          # ルート
+        dir1811 = ""                      # ← 空文字
+        dir1810 = "$MELPRJ$"
+    elif path.startswith("$"):
+        core   = path.rstrip("\\")
+        dir1811 = core + "\\"
+        dir1810 = core
+    else:
+        core   = rf"$MELPRJ$\{path}".rstrip("\\")
+        dir1811 = core + "\\"
+        dir1810 = core
+
     try:
+        # ---------- ① 1811h ----------
         rsp = plc.read_search_fileinfo(
-            drive_no=drive,
-            filename=filename,
-            directory=path            # ★ 復活させる（空文字可）
+            drive_no = drive,
+            filename = filename,
+            directory = dir1811
         )
-        files = _parse_iqr(rsp["raw"])
-        return {"files": files}
-    
+        return { "files": _parse_iqr(rsp["raw"]) }
+
     except MCProtocolError as ex:
-        if ex.status == 0xC061:       # 指定ファイル無し
-            raise HTTPException(status_code=404, detail="file not found")
-        else:
-            raise HTTPException(status_code=500, detail=str(ex))
+        # ----- エラーコードを安全に取り出す -----
+        ec = getattr(ex, "errorcode", None)
+        if ec is None:
+            raw = ex.args[0]
+            if isinstance(raw, int):
+                ec = f"0x{raw:04X}"
+            else:
+                import re
+                m = re.search(r"0x[0-9A-Fa-f]+", str(raw))
+                ec = m.group(0) if m else str(raw)
+
+        # ---------- ② 1810h フォールバック ----------
+        if ec.upper() == "0XC061":        # 指定ファイル無し
+            files = []
+            start = 1
+            while True:
+                cnt, info = plc.read_directory_fileinfo(
+                    drive_no       = drive,
+                    start_file_no  = start,
+                    request_count  = 256,
+                    iqr            = True,
+                    path           = dir1810
+                )
+                files += _parse_iqr(info[0]["raw"])
+                if cnt < 256:
+                    break
+                start += cnt
+
+            hits = [
+                f for f in files
+                if f"{f['name']}.{f['ext']}".upper() == filename.upper()
+            ]
+            if hits:
+                return { "files": hits }
+
+        # ---------- ③ どうしても無い / 別コード ----------
+        raise HTTPException(
+            status_code = 404 if ec.upper() == "0XC061" else 500,
+            detail      = f"MC-Protocol error {ec}"
+        )
 
     finally:
         plc.close()
-        
