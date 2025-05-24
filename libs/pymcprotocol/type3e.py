@@ -1075,3 +1075,35 @@ class Type3E:
             idx += ENTRY
 
         return file_info_count, entries
+    
+    # ------------------------------------------------------------
+    # 1811h  File-Search 
+    # ------------------------------------------------------------
+    def read_search_fileinfo(self, *, drive_no: int,
+                            filename: str, directory: str = ""):
+        CMD, SUB = 0x1811, 0x0040
+
+        pw  = self._encode_value(0, "long")
+        drv = self._encode_value(drive_no, "short")
+
+        # ---------- ファイル名 ----------
+        fdat = (filename + "\x00").encode("utf-16le")
+        fn   = self._encode_value(len(fdat)//2, "short") + fdat
+
+        # ---------- ディレクトリ ----------
+        if directory:
+            dd   = (directory.rstrip("\\") + "\x00").encode("utf-16le")
+            dlen = self._encode_value(len(dd)//2, "short") + dd
+        else:
+            # “無し” のときは 長さ=1 ＋ NULL１文字
+            dlen = self._encode_value(1, "short") + b"\x00\x00"
+
+        param   = pw + drv + fn + dlen
+        request = self._make_commanddata(CMD, SUB) + param
+
+        self._send(self._make_senddata(request))
+        answer = self._recv()
+        self._check_cmdanswer(answer)
+
+        idx = self._get_answerdata_index()
+        return {"raw": answer[idx:]}
