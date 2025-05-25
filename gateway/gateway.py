@@ -9,12 +9,17 @@ from pydantic import BaseModel
 from pymcprotocol import Type3E
 from pymcprotocol.mcprotocolerror import MCProtocolError
 
-app = FastAPI(title="PLC Gateway")
+from plc_filecontrol import PlcFileControl 
 
+# ──────────────────── 環境変数 ────────────────────
 PLC_IP      = os.getenv("PLC_IP",         "127.0.0.1")
 PLC_PORT    = int(os.getenv("PLC_PORT",   "5511"))
 TIMEOUT_SEC = float(os.getenv("PLC_TIMEOUT_SEC", "3.0"))
 PLC_DRIVE   = int(os.getenv("PLC_DRIVE",  "4"))
+
+# ──────────────────── FastAPI ────────────────────
+app = FastAPI(title="PLC Gateway")
+file_ctl = PlcFileControl(PLC_IP, PLC_PORT, TIMEOUT_SEC)
 
 # ─────────────────── Device Read (既存) ───────────────────
 class ReadRequest(BaseModel):
@@ -187,3 +192,51 @@ def api_filesearch(
 
     finally:
         plc.close()
+
+# ------------------------------------------------------------
+# 1827 / 1828 / 182A 追加 API
+# ------------------------------------------------------------
+class FileOpenReq(BaseModel):
+    drive: int = PLC_DRIVE
+    filename: str
+    mode: str = "r"
+
+class FileReadReq(BaseModel):
+    fp: int
+    offset: int = 0
+    length: int = 1024            # 0-1920
+
+class FileCloseReq(BaseModel):
+    fp: int
+
+
+@app.post("/api/file/open")
+def api_file_open(req: FileOpenReq):
+    try:
+        fp = file_ctl.open_file(drive=req.drive,
+                                filename=req.filename,
+                                mode=req.mode)
+        return {"fp": fp}
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=str(ex))
+
+
+@app.post("/api/file/read")
+def api_file_read(req: FileReadReq):
+    try:
+        data = file_ctl.read_file(fp_no=req.fp,
+                                  offset=req.offset,
+                                  length=req.length)
+        return {"size": len(data),
+                "data": base64.b64encode(data).decode()}
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=str(ex))
+
+
+@app.post("/api/file/close")
+def api_file_close(req: FileCloseReq):
+    try:
+        file_ctl.close_file(fp_no=req.fp)
+        return {"result": "ok"}
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=str(ex))
