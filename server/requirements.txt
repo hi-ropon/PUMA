@@ -6,3 +6,4 @@ eventlet
 openai
 flask-login
 openai-agents
+flask_cors
