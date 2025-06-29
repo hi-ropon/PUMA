@@ -1,7 +1,10 @@
 # ------------------------------------------------------------
+# gateway.py
 # FastAPI Gateway ─ 1810 / 1811 File-API & Device Read
 # ------------------------------------------------------------
 import os
+import json
+import base64
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -240,3 +243,78 @@ def api_file_close(req: FileCloseReq):
         return {"result": "ok"}
     except Exception as ex:
         raise HTTPException(status_code=500, detail=str(ex))
+    
+# ------------------------------------------------------------
+# 1827 / 1828 / 182A 追加 API – 1 回 1920 B 制限付きで
+#                   ファイルを最後まで読み、JSON 化して保存
+# ------------------------------------------------------------
+class FileReadAllReq(BaseModel):
+    """
+    MAIN.PRG のようなファイルを全バイト読出して
+    <filename>.json へ保存するリクエスト
+    """
+    drive: int = PLC_DRIVE
+    filename: str                       # 例: "MAIN.PRG" あるいは "$MELPRJ$\\MAIN.PRG"
+    chunk: int = 1920                   # 1828h 制約: 0-1920 byte
+    json_path: Optional[str] = None     # 未指定なら filename+".json" に保存
+
+
+@app.post("/api/file/readall")
+def api_file_readall(req: FileReadAllReq):
+    """
+    1. 1827h でファイルを開く
+    2. 1828h を chunk サイズずつ繰返して全バイト取得
+    3. 182Ah でクローズ
+    4. Base64 エンコードして JSON ファイルへ書出し
+    """
+    if req.chunk <= 0 or req.chunk > 1920:
+        raise HTTPException(status_code=400,
+                            detail="chunk は 1-1920 byte で指定してください")
+
+    # ---------- ① ファイルを開く ----------
+    try:
+        fp = file_ctl.open_file(drive=req.drive,
+                                filename=req.filename,
+                                mode="r")
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=str(ex))
+
+    try:
+        # ---------- ② 全バイト読出し ----------
+        offset = 0
+        content = b""
+
+        while True:
+            part = file_ctl.read_file(fp_no=fp,
+                                      offset=offset,
+                                      length=req.chunk)
+            if not part:
+                break                    # 読出し完了
+            content += part
+            if len(part) < req.chunk:
+                break                    # 最終チャンク
+            offset += req.chunk
+
+        # ---------- ③ JSON へ保存 ----------
+        json_file = req.json_path or f"{os.path.basename(req.filename)}.json"
+        record = {
+            "filename": req.filename,
+            "size":     len(content),
+            "data":     base64.b64encode(content).decode("ascii")
+        }
+        with open(json_file, "w", encoding="utf-8") as fp_json:
+            json.dump(record, fp_json, ensure_ascii=False, indent=2)
+
+        # ---------- ④ 結果 ----------
+        return {
+            "filename": req.filename,
+            "bytes_read": len(content),
+            "json_saved": json_file
+        }
+
+    finally:
+        # ---------- ⑤ 必ずクローズ ----------
+        try:
+            file_ctl.close_file(fp_no=fp)
+        except Exception:
+            pass
