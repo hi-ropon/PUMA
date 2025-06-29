@@ -99,7 +99,7 @@ def _run_diagnostics(
             "不具合調査の場合は、原因は1つとは限らないので、\n"
             "複数の可能性を挙げて調査してください。\n"
         ),
-        model="gpt-4.1-mini",
+        model="o4-mini",
         tools=tools,
         output_type=str,
     )
